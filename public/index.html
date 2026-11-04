@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrusMeet | C-DAC TrusToken Lab Video Conference</title>
+  <meta name="description" content="Secure Lab Video Conferencing System Integrated with C-DAC TrusToken USB Hardware Authentication (IS-16695 PKCS#11).">
+  <link rel="stylesheet" href="/css/index.css">
+</head>
+<body>
+
+  <!-- Top Security Header -->
+  <header class="top-nav" id="main-nav">
+    <div class="brand-container">
+      <div class="brand-logo-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+      <div class="brand-title">
+        <h1>TrusMeet Lab Conference</h1>
+        <div class="brand-subtitle">de.ci.phe.red LAB &bull; IIT Bhilai &bull; C-DAC TrusToken</div>
+      </div>
+    </div>
+
+    <div class="token-status-hud">
+      <div id="token-status-pill" class="token-pill emulated" title="Hardware Dongle Status">
+        <span class="pulse-dot"></span>
+        <span>Initializing TrusToken PKCS#11...</span>
+      </div>
+
+      <div id="user-badge" class="user-badge" style="display: none;">
+        <div class="user-avatar" id="user-avatar-display">PI</div>
+        <div class="user-info-text">
+          <div class="name" id="user-name-display">Not Logged In</div>
+          <div class="role" id="user-role-display">Role</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- =======================================================================
+       1. LOBBY & AUTHENTICATION PORTAL
+       ======================================================================= -->
+  <main id="lobby-view" class="lobby-container">
+    <!-- Left Column: TrusToken Hardware Card & Member Selection -->
+    <section class="lobby-panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--cyan-400);">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            <span>TrusToken Hardware Authentication</span>
+          </div>
+          <div class="panel-desc">
+            Indian Standard IS-16695 (Part 1 & 2) compliant USB Cryptographic Token. Private keys are securely protected on-chip and never exported.
+          </div>
+        </div>
+      </div>
+
+      <!-- USB Dongle Architecture Card -->
+      <div class="trustoken-card" id="trustoken-dongle-card">
+        <div class="token-dongle-visual">
+          <div class="dongle-graphic">
+            <div class="dongle-usb-plug">
+              <div class="usb-pin"></div>
+              <div class="usb-pin"></div>
+            </div>
+            <div class="dongle-led"></div>
+            <div class="dongle-label">C-DAC<br>TrusToken</div>
+          </div>
+          <div class="token-meta-grid">
+            <div class="meta-item">
+              <div class="meta-label">Standards</div>
+              <div class="meta-value">IS-16695 / ISO-7816</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Crypto Engine</div>
+              <div class="meta-value">RSA 4096 / ECC P-256</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">PKCS Interface</div>
+              <div class="meta-value">PKCS#11 / PKCS#7</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">On-Chip Storage</div>
+              <div class="meta-value">100 KB Secure EEPROM</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lab Member Profile Selection -->
+      <div class="member-select-section">
+        <label>Select Lab Identity to Authenticate:</label>
+        <div class="member-cards-grid" id="member-cards-grid">
+          <!-- Populated dynamically by app.js -->
+        </div>
+      </div>
+
+      <!-- Action Button -->
+      <div>
+        <button id="btn-auth-token" class="btn-primary" style="width: 100%;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span>Authenticate with TrusToken (PIN Required)</span>
+        </button>
+        <div id="auth-status-text" style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.6rem; text-align: center;">
+          Plug in your C-DAC TrusToken USB dongle and enter hardware PIN.
+        </div>
+      </div>
+
+      <!-- Available Meeting Rooms -->
+      <div style="margin-top: 0.5rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.85rem;">
+          <div style="font-weight: 700; font-size: 1.05rem; color: var(--text-primary);">Active Lab Meeting Rooms</div>
+        </div>
+        <div class="room-list" id="room-list-container">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Create New Room -->
+      <div style="display: flex; gap: 0.6rem; margin-top: 0.5rem;">
+        <input type="text" id="new-room-name" placeholder="New Lab Meeting Title (e.g. Thesis Sync)" style="flex:1; background:rgba(15,23,42,0.8); border:1px solid var(--border-subtle); border-radius:12px; padding:0.75rem 1rem; color:var(--text-primary); font-size:0.88rem;">
+        <button id="btn-create-room" class="btn-secondary">Create Room</button>
+      </div>
+    </section>
+
+    <!-- Right Column: Camera / Mic Preview & Zero-Trust Lab Protocols -->
+    <section class="lobby-panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--emerald-400);">
+              <path d="M23 7l-7 5 7 5V7z"></path>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            </svg>
+            <span>Lab AV Test & Security Readiness</span>
+          </div>
+          <div class="panel-desc">
+            Check your audio/video feed before entering the room. WebRTC streams are end-to-end encrypted and bound to your TrusToken credentials.
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview Video Box -->
+      <div class="device-preview-card">
+        <video id="preview-video" autoplay playsinline muted class="mirrored"></video>
+        <div class="preview-overlay-controls">
+          <button id="btn-preview-mic" class="icon-btn" title="Toggle Microphone">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="23"></line>
+              <line x1="8" y1="23" x2="16" y2="23"></line>
+            </svg>
+          </button>
+          <button id="btn-preview-cam" class="icon-btn" title="Toggle Camera">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 7l-7 5 7 5V7z"></path>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mic Audio Meter -->
+      <div class="audio-meter-container">
+        <div class="audio-meter-label">
+          <span>Microphone Input Level</span>
+          <span style="color:var(--emerald-400);">Live Analyser</span>
+        </div>
+        <div class="audio-meter-track">
+          <div id="preview-audio-meter" class="audio-meter-fill"></div>
+        </div>
+      </div>
+
+      <!-- Security Purposes Card -->
+      <div style="background:rgba(15,23,42,0.6); border:1px solid var(--border-subtle); border-radius:16px; padding:1.25rem;">
+        <div style="font-weight:700; font-size:0.95rem; color:var(--text-primary); margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem;">
+          <span style="color:var(--cyan-400);">🛡️</span> TrusToken Security Purposes in this Conference:
+        </div>
+        <ul style="font-size:0.82rem; color:var(--text-secondary); line-height:1.6; padding-left:1.25rem; display:flex; flex-direction:column; gap:0.35rem;">
+          <li><strong>Passwordless Challenge-Response Login:</strong> 256-bit cryptographically signed nonce.</li>
+          <li><strong>Zero-Trust Room Gatekeeping:</strong> Only lab members possessing verified TrusToken certificates can enter.</li>
+          <li><strong>Hardware Presence Heartbeat:</strong> Unplugging the USB dongle automatically mutes & locks the stream.</li>
+          <li><strong>PKCS#7 Digital Signer:</strong> Official lab meeting minutes & research milestones signed with non-repudiation.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <!-- =======================================================================
+       2. ACTIVE CONFERENCE ROOM VIEW
+       ======================================================================= -->
+  <div id="conference-view" class="conference-view">
+    <!-- Conference Header -->
+    <div class="conference-header">
+      <div class="conf-room-details">
+        <div class="brand-logo-icon" style="width:36px; height:36px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="conf-room-title" id="conf-room-title">de.ci.phe.red LAB Weekly Sync</div>
+          <div style="font-size:0.72rem; color:var(--text-muted); display:flex; gap:0.75rem; align-items:center;">
+            <span>Room ID: <strong id="conf-room-id-tag">LAB-DECIPHERED-SYNC</strong></span>
+            <span class="conf-e2ee-tag">🔒 TrusToken IS-16695 Verified</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:1rem;">
+        <button id="btn-copy-invite" class="btn-secondary" style="padding:0.4rem 0.85rem; font-size:0.78rem; display:flex; align-items:center; gap:0.4rem;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          <span>Copy Invite</span>
+        </button>
+        <div class="conf-timer" id="conf-timer">00:00</div>
+      </div>
+    </div>
+
+    <!-- Conference Main Stage -->
+    <div class="conference-stage">
+      <!-- Video Grid -->
+      <div class="video-grid-container" id="video-grid" data-peers="1">
+        <!-- Local User Video Tile -->
+        <div class="video-tile" id="local-tile">
+          <video id="local-video" autoplay playsinline muted class="video-element mirrored"></video>
+          <div class="tile-info-bar">
+            <div class="tile-participant-tag">
+              <span class="tile-participant-name" id="local-name-tag">You</span>
+              <span class="tile-token-badge" id="local-token-badge">TT-IN-0001</span>
+            </div>
+            <div class="tile-status-icons">
+              <div class="tile-status-icon" id="local-mic-indicator">🎤</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Drawer 1: TrusToken Security Suite & Heartbeat Hub -->
+      <aside class="side-drawer" id="drawer-security">
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span>🛡️</span>
+            <span>TrusToken Security Hub</span>
+          </div>
+          <button class="drawer-close-btn">&times;</button>
+        </div>
+        <div class="drawer-body" id="security-hub-body">
+          <!-- Populated by app.js -->
+        </div>
+      </aside>
+
+      <!-- Drawer 2: Collaborative Meeting Minutes & PKCS#7 Signer -->
+      <aside class="side-drawer" id="drawer-minutes">
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span>📜</span>
+            <span>Minutes & Digital Signer</span>
+          </div>
+          <button class="drawer-close-btn">&times;</button>
+        </div>
+        <div class="drawer-body">
+          <p style="font-size:0.82rem; color:var(--text-secondary);">
+            Collaborative real-time notes pad. Sign milestones and meeting decisions using your C-DAC TrusToken.
+          </p>
+          <textarea id="minutes-editor" class="minutes-editor" placeholder="Record meeting minutes, research milestones, and approved action items here..."></textarea>
+          
+          <button id="btn-sign-minutes" class="btn-primary" style="width:100%;">
+            <span>✍️ Digitally Sign Minutes with TrusToken</span>
+          </button>
+
+          <div style="font-weight:700; font-size:0.88rem; color:var(--text-primary); margin-top:0.5rem;">
+            Official Digital Signature Seals:
+          </div>
+          <div id="signatures-list" style="display:flex; flex-direction:column; gap:0.85rem;">
+            <!-- Signatures rendered here -->
+          </div>
+        </div>
+      </aside>
+
+      <!-- Drawer 3: Encrypted Chat & Paper Sharing -->
+      <aside class="side-drawer" id="drawer-chat">
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span>💬</span>
+            <span>Encrypted Lab Chat</span>
+          </div>
+          <button class="drawer-close-btn">&times;</button>
+        </div>
+        <div class="drawer-body" style="padding-bottom:1rem;">
+          <div class="chat-messages-container" id="chat-messages">
+            <!-- Messages rendered here -->
+          </div>
+          <div class="chat-input-bar">
+            <input type="text" id="chat-input" class="chat-input" placeholder="Type encrypted message...">
+            <button id="btn-send-chat" class="btn-primary" style="padding:0.65rem 1rem;">Send</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Drawer 4: Participant Roster & Host Controls -->
+      <aside class="side-drawer" id="drawer-participants">
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span>👥</span>
+            <span>Lab Participants</span>
+          </div>
+          <button class="drawer-close-btn">&times;</button>
+        </div>
+        <div class="drawer-body">
+          <div style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.5rem;">
+            All members authenticated via IS-16695 TrusToken PKI
+          </div>
+          <div id="participants-list" style="display:flex; flex-direction:column; gap:0.6rem;">
+            <!-- Participants rendered here -->
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Floating Bottom Control Dock -->
+    <nav class="conference-controls" id="conf-dock">
+      <button class="dock-btn" id="btn-toggle-mic" title="Toggle Mic">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+          <line x1="12" y1="19" x2="12" y2="23"></line>
+          <line x1="8" y1="23" x2="16" y2="23"></line>
+        </svg>
+        <span>Mute</span>
+      </button>
+
+      <button class="dock-btn" id="btn-toggle-cam" title="Toggle Camera">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 7l-7 5 7 5V7z"></path>
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+        </svg>
+        <span>Stop Video</span>
+      </button>
+
+      <button class="dock-btn" id="btn-share-screen" title="Share Screen">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        <span>Share</span>
+      </button>
+
+      <button class="dock-btn" id="btn-record-meeting" title="Record Meeting">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <circle cx="12" cy="12" r="4" fill="currentColor"></circle>
+        </svg>
+        <span>Record</span>
+      </button>
+
+      <div style="width:1px; height:36px; background:var(--border-subtle); margin:0 0.25rem;"></div>
+
+      <button class="dock-btn" id="btn-toggle-minutes" title="Meeting Minutes & Digital Signer">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        <span>Minutes</span>
+      </button>
+
+      <button class="dock-btn" id="btn-toggle-security" title="TrusToken Security Hub">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        <span>Security</span>
+      </button>
+
+      <button class="dock-btn" id="btn-toggle-chat" title="Encrypted Chat">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span>Chat</span>
+      </button>
+
+      <button class="dock-btn" id="btn-toggle-participants" title="Participants">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+        <span>Members</span>
+      </button>
+
+      <div style="width:1px; height:36px; background:var(--border-subtle); margin:0 0.25rem;"></div>
+
+      <button class="dock-btn end-call" id="btn-leave-call" title="Leave Meeting">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6 19.8 19.8 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path>
+          <line x1="23" y1="1" x2="1" y2="23"></line>
+        </svg>
+        <span style="color:white; font-weight:700;">Leave</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- =======================================================================
+       3. HARDWARE PIN VERIFICATION MODAL
+       ======================================================================= -->
+  <div class="modal-backdrop" id="pin-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div style="font-size:2.5rem; margin-bottom:0.5rem;">🔑</div>
+        <h3>TrusToken Hardware PIN</h3>
+        <p id="pin-modal-subtitle">Enter hardware PIN to unlock on-chip cryptographic container</p>
+      </div>
+
+      <div>
+        <div class="pin-input-group">
+          <input type="password" id="pin-1" class="pin-digit-box" maxlength="1" inputmode="numeric">
+          <input type="password" id="pin-2" class="pin-digit-box" maxlength="1" inputmode="numeric">
+          <input type="password" id="pin-3" class="pin-digit-box" maxlength="1" inputmode="numeric">
+          <input type="password" id="pin-4" class="pin-digit-box" maxlength="1" inputmode="numeric">
+          <input type="password" id="pin-5" class="pin-digit-box" maxlength="1" inputmode="numeric">
+          <input type="password" id="pin-6" class="pin-digit-box" maxlength="1" inputmode="numeric">
+        </div>
+        <div class="pin-info-row">
+          <span>Security Standard: IS-16695 Part 2</span>
+          <span>Default Lab PIN: <code>123456</code></span>
+        </div>
+        <div id="pin-error-msg" style="font-size:0.82rem; color:var(--rose-400); margin-top:0.5rem; text-align:center; font-weight:600;"></div>
+      </div>
+
+      <div style="display:flex; gap:0.75rem;">
+        <button id="btn-cancel-pin" class="btn-secondary" style="flex:1;">Cancel</button>
+        <button id="btn-submit-pin" class="btn-primary" style="flex:1;">Verify & Unlock Token</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/webrtc.js"></script>
+  <script src="/js/trustoken-client.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
