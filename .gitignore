@@ -1,25 +1,5 @@
-# Dependencies
-node_modules/
-
-# TLS certificates and private keys
-*.key
-*.crt
-*.pem
-
-# Lab CA and enrolled token records (user details and certificates)
-data/
-
-# Runtime files from the public tunnel
-tunnel.log
-tunnel.pid
-current-tunnel-url.txt
-
-# Python
 __pycache__/
 *.pyc
-.venv/
-venv/
-
-# Environment files
 .env
-.env.*
+.venv/
+node_modules/
