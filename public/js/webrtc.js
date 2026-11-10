@@ -3,6 +3,9 @@
  * Handles WebRTC connections, audio level analysis, screen sharing, and recording.
  */
 
+const RELAY_CLIP_MS = 800;
+const MAX_QUEUED_RELAY_CLIPS = 3;
+
 class WebRTCManager {
   constructor(socket, onPeerStreamAdded, onPeerStreamRemoved, onActiveSpeaker) {
     this.socket = socket;
@@ -13,6 +16,13 @@ class WebRTCManager {
     this.localStream = null;
     this.screenStream = null;
     this.isScreenSharing = false;
+
+    this.cameraTrack = null; // The live camera, or null while it is switched off
+    this.usesRealCamera = false;
+    this.blankVideoTrack = null;
+    this.blankPainter = null;
+    this.cameraQueue = Promise.resolve(); // Keeps quick on/off clicks in order
+    this.closed = false;
 
     this.peers = new Map(); // peerId -> { pc, stream, user }
     this.audioContext = null;
@@ -36,24 +46,61 @@ class WebRTCManager {
     // Voice Relay over WebSocket fallback
     this.voiceRelayRecorder = null;
     this.isVoiceRelayActive = false;
+    this.relayPlayback = new Map(); // senderId -> { clips, playing }
     this.setupVoicePacketReceiver();
   }
 
   // Setup WebSocket Voice Packet Receiver (Works over carrier CGNAT & firewall)
   setupVoicePacketReceiver() {
     if (!this.socket) return;
-    this.socket.on('voice-packet-broadcast', async ({ senderId, senderName, audioData, mimeType }) => {
+    this.socket.on('voice-packet-broadcast', ({ senderId, audioData, mimeType }) => {
+      // With a working direct connection the voice is already playing.
+      const peer = this.peers.get(senderId);
+      if (peer && peer.pc.connectionState === 'connected') return;
       try {
-        const audioBlob = this.base64ToBlob(audioData, mimeType || 'audio/webm;codecs=opus');
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audioEl = new Audio(audioUrl);
-        audioEl.volume = 1.0;
-        await audioEl.play();
-        setTimeout(() => URL.revokeObjectURL(audioUrl), 5000);
+        this.queueRelayClip(senderId, this.base64ToBlob(audioData, mimeType || 'audio/webm;codecs=opus'));
       } catch (err) {
-        // Can be suppressed if mobile autoplay policy blocks
+        console.warn('[WebRTC] Ignored an unreadable voice clip:', err);
       }
     });
+  }
+
+  // Clips from one person play one after another. A backlog is dropped so the
+  // voice doesn't drift further and further behind.
+  queueRelayClip(senderId, blob) {
+    let playback = this.relayPlayback.get(senderId);
+    if (!playback) {
+      playback = { clips: [], playing: false };
+      this.relayPlayback.set(senderId, playback);
+    }
+    if (playback.clips.length >= MAX_QUEUED_RELAY_CLIPS) playback.clips.shift();
+    playback.clips.push(blob);
+    this.playNextRelayClip(playback);
+  }
+
+  playNextRelayClip(playback) {
+    if (playback.playing) return;
+    const blob = playback.clips.shift();
+    if (!blob) return;
+    playback.playing = true;
+
+    const url = URL.createObjectURL(blob);
+    const audioEl = new Audio(url);
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      URL.revokeObjectURL(url);
+      playback.playing = false;
+      this.playNextRelayClip(playback);
+    };
+    audioEl.onended = finish;
+    audioEl.onerror = finish;
+    audioEl.play().catch(finish); // Mobile autoplay rules can refuse a clip.
+  }
+
+  needsVoiceRelay() {
+    return [...this.peers.values()].some((peer) => peer.pc.connectionState !== 'connected');
   }
 
   base64ToBlob(base64, mimeType) {
@@ -69,48 +116,58 @@ class WebRTCManager {
   // Start continuous voice packet relay fallback
   startVoiceRelay() {
     if (this.isVoiceRelayActive || !this.localStream) return;
+    const audioTracks = this.localStream.getAudioTracks();
+    if (!audioTracks.some(t => t.enabled)) return; // Muted: nothing to send.
+
+    let options = {};
+    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      options = { mimeType: 'audio/webm;codecs=opus' };
+    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+      options = { mimeType: 'audio/mp4' };
+    }
+
+    this.isVoiceRelayActive = true;
+    this.recordRelayClip(new MediaStream(audioTracks), options);
+  }
+
+  // Each clip is a separate recording, because a slice cut from the middle of
+  // one recording has no header and can't be played by itself.
+  recordRelayClip(stream, options) {
+    if (!this.isVoiceRelayActive) return;
+    let recorder;
     try {
-      const audioTracks = this.localStream.getAudioTracks();
-      if (!audioTracks || audioTracks.length === 0) return;
-
-      const audioOnlyStream = new MediaStream(audioTracks);
-      let options = {};
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        options = { mimeType: 'audio/webm;codecs=opus' };
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        options = { mimeType: 'audio/mp4' };
-      }
-
-      this.voiceRelayRecorder = new MediaRecorder(audioOnlyStream, options);
-      this.voiceRelayRecorder.ondataavailable = async (e) => {
-        if (e.data && e.data.size > 0 && this.socket) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64data = reader.result.split(',')[1];
-            if (base64data) {
-              this.socket.emit('voice-packet', {
-                audioData: base64data,
-                mimeType: options.mimeType || 'audio/webm'
-              });
-            }
-          };
-          reader.readAsDataURL(e.data);
-        }
-      };
-
-      this.voiceRelayRecorder.start(400); // 400ms slices for smooth real-time voice
-      this.isVoiceRelayActive = true;
-      console.log('[WebRTC] Voice Relay Fallback active (Zero-NAT packet delivery).');
+      recorder = new MediaRecorder(stream, options);
     } catch (e) {
       console.warn('[WebRTC] Voice relay fallback start failed:', e);
+      this.isVoiceRelayActive = false;
+      return;
     }
+
+    recorder.ondataavailable = (e) => {
+      if (!e.data || e.data.size === 0 || !this.needsVoiceRelay()) return;
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const audioData = reader.result.split(',')[1];
+        if (audioData) {
+          this.socket.emit('voice-packet', { audioData, mimeType: options.mimeType || 'audio/webm' });
+        }
+      };
+      reader.readAsDataURL(e.data);
+    };
+    recorder.onstop = () => this.recordRelayClip(stream, options);
+
+    this.voiceRelayRecorder = recorder;
+    recorder.start();
+    setTimeout(() => {
+      if (recorder.state !== 'inactive') recorder.stop();
+    }, RELAY_CLIP_MS);
   }
 
   stopVoiceRelay() {
+    this.isVoiceRelayActive = false;
     if (this.voiceRelayRecorder && this.voiceRelayRecorder.state !== 'inactive') {
       try { this.voiceRelayRecorder.stop(); } catch (e) {}
     }
-    this.isVoiceRelayActive = false;
   }
 
   // 1. Initialize Local Media (Webcam & Microphone with synthetic fallback)
@@ -125,6 +182,8 @@ class WebRTCManager {
             facingMode: 'user'
           }
         });
+        this.cameraTrack = this.localStream.getVideoTracks()[0] || null;
+        this.usesRealCamera = Boolean(this.cameraTrack);
       }
     } catch (err) {
       console.warn('Real camera/mic unavailable or permission denied. Using synthetic media stream for lab demonstration.', err);
@@ -201,11 +260,11 @@ class WebRTCManager {
       // Watermark Text
       ctx.fillStyle = '#38bdf8';
       ctx.font = '600 16px Inter, sans-serif';
-      ctx.fillText(`C-DAC TrusToken Video Node: ${label}`, cx, canvas.height - 50);
+      ctx.fillText(`Placeholder video (no camera): ${label}`, cx, canvas.height - 50);
 
       ctx.fillStyle = '#64748b';
       ctx.font = '12px JetBrains Mono, monospace';
-      ctx.fillText(`IS-16695 PKI Stream | ${new Date().toLocaleTimeString()}`, cx, canvas.height - 25);
+      ctx.fillText(new Date().toLocaleTimeString(), cx, canvas.height - 25);
 
       requestAnimationFrame(draw);
     };
@@ -486,11 +545,84 @@ class WebRTCManager {
     }
   }
 
+  // Resolves to true if the camera ended up in the requested state.
   setVideoEnabled(enabled) {
-    if (this.localStream) {
-      this.localStream.getVideoTracks().forEach(t => { t.enabled = enabled; });
-      this.socket.emit('toggle-media-state', { type: 'video', enabled });
+    if (!this.localStream) return Promise.resolve(false);
+    this.cameraQueue = this.cameraQueue.then(async () => {
+      let applied = true;
+      if (this.usesRealCamera) {
+        applied = enabled ? await this.startCamera() : this.stopCamera();
+      } else {
+        this.localStream.getVideoTracks().forEach(t => { t.enabled = enabled; });
+      }
+      if (applied) this.socket.emit('toggle-media-state', { type: 'video', enabled });
+      return applied;
+    });
+    return this.cameraQueue;
+  }
+
+  // Releases the hardware, so the camera's light goes off. Peers get a black
+  // picture in its place, which keeps their video connection ready for later.
+  stopCamera() {
+    const track = this.cameraTrack;
+    if (!track) return true;
+    this.cameraTrack = null;
+    track.stop();
+    this.swapLocalVideoTrack(track, this.getBlankVideoTrack());
+    return true;
+  }
+
+  async startCamera() {
+    if (this.cameraTrack) return true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+      });
+      const track = stream.getVideoTracks()[0];
+      if (this.closed) {
+        track.stop();
+        return false;
+      }
+      this.cameraTrack = track;
+      this.swapLocalVideoTrack(this.blankVideoTrack, track);
+      this.stopBlankPainter();
+      return true;
+    } catch (err) {
+      console.warn('Could not turn the camera back on:', err);
+      return false;
     }
+  }
+
+  swapLocalVideoTrack(oldTrack, newTrack) {
+    this.localStream.removeTrack(oldTrack);
+    this.localStream.addTrack(newTrack);
+    if (this.isScreenSharing) return; // Peers keep the screen until sharing stops.
+    this.peers.forEach((peer) => {
+      const sender = peer.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) sender.replaceTrack(newTrack).catch(e => console.warn('[WebRTC] replaceTrack failed:', e));
+    });
+  }
+
+  getBlankVideoTrack() {
+    if (!this.blankVideoTrack) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 360;
+      this.paintBlankFrame = () => {
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      };
+      this.paintBlankFrame();
+      this.blankVideoTrack = canvas.captureStream(1).getVideoTracks()[0];
+    }
+    if (!this.blankPainter) this.blankPainter = setInterval(this.paintBlankFrame, 1000);
+    return this.blankVideoTrack;
+  }
+
+  stopBlankPainter() {
+    clearInterval(this.blankPainter);
+    this.blankPainter = null;
   }
 
   // 7. Meeting Recording (Local WebM)
@@ -498,12 +630,15 @@ class WebRTCManager {
     if (!this.localStream) return false;
     this.recordedChunks = [];
 
+    // A fixed copy of the track list: switching the camera must not abort the recording.
+    const recordedStream = new MediaStream(this.localStream.getTracks());
+
     try {
       const options = { mimeType: 'video/webm;codecs=vp9,opus' };
-      this.mediaRecorder = new MediaRecorder(this.localStream, options);
+      this.mediaRecorder = new MediaRecorder(recordedStream, options);
     } catch (e) {
       try {
-        this.mediaRecorder = new MediaRecorder(this.localStream);
+        this.mediaRecorder = new MediaRecorder(recordedStream);
       } catch (e2) {
         console.error('MediaRecorder not supported:', e2);
         return false;
@@ -542,6 +677,7 @@ class WebRTCManager {
 
   removePeer(peerId) {
     const peer = this.peers.get(peerId);
+    this.relayPlayback.delete(peerId);
     if (peer) {
       peer.pc.close();
       this.peers.delete(peerId);
@@ -552,6 +688,8 @@ class WebRTCManager {
   }
 
   closeAll() {
+    this.closed = true;
+    this.stopBlankPainter();
     this.peers.forEach((peer) => peer.pc.close());
     this.peers.clear();
 

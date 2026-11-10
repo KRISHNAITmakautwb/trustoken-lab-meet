@@ -74,8 +74,8 @@ if [ -n "$FOUND_URL" ]; then
     echo "$NEW_PID" > "$DIR/tunnel.pid"
     echo "=================================================================="
     echo "✅ Public Tunnel is LIVE!"
-    echo "🔗 Share this link with lab members on mobile / cellular data:"
-    echo "👉 $FOUND_URL/?room=LAB-DECIPHERED-SYNC"
+    echo "🔗 Open this link, log in, and create a meeting to get a link to share:"
+    echo "👉 $FOUND_URL"
     echo "=================================================================="
     
     if [[ "$1" == "--daemon" || "$1" == "-d" ]]; then

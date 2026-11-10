@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """
-C-DAC TrusToken PKCS#11 Security Bridge
-Interfaces with /usr/local/lib/libtrustokenP11Libv3.3.0.so
-and provides cryptographic operations, X.509 certificate handling,
-challenge-response verification, hardware heartbeat, and digital signing.
-Compliant with IS-16695 Part 1 & Part 2, PKCS#11 v2.20, and ISO-7816.
+TrusMeet account and signing bridge.
+
+Accounts, passwords and per-user software signing keys live in a SQLite database.
+Requests arrive as JSON on stdin so passwords never appear on a command line.
+
+Reads driver and token information through /usr/local/lib/libtrustokenP11Libv3.3.0.so,
+but signing uses software keys, not the USB token's chip. It makes no claim of
+IS 16695, PKCS#7 or hardware-backed signing.
 """
 
 import sys
 import os
+import re
 import json
+import time
 import base64
 import ctypes
 import hashlib
+import hmac
 import datetime
+import secrets
+import sqlite3
 from cryptography import x509
-from cryptography.x509.oid import NameOID, ExtensionOID
+from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, ec, padding
-from cryptography.hazmat.primitives.serialization import pkcs7
+from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
 PKCS11_LIB_PATH = "/usr/local/lib/libtrustokenP11Libv3.3.0.so"
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = os.environ.get("TRUSTOKEN_DATA_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
 
 # PKCS#11 Structures
 class CK_VERSION(ctypes.Structure):
@@ -95,8 +102,7 @@ def check_hardware_token():
                 "manufacturer": bytes(info.manufacturerID).decode('utf-8', errors='ignore').strip(),
                 "description": bytes(info.libraryDescription).decode('utf-8', errors='ignore').strip(),
                 "cryptoki_version": f"{info.cryptokiVersion.major}.{info.cryptokiVersion.minor}",
-                "library_version": f"{info.libraryVersion.major}.{info.libraryVersion.minor}",
-                "standard": "IS-16695 (Part 1 & 2) / PKCS#11 v2.20 / ISO-7816"
+                "library_version": f"{info.libraryVersion.major}.{info.libraryVersion.minor}"
             }
 
         num_slots = ctypes.c_ulong(0)
@@ -125,29 +131,147 @@ def check_hardware_token():
                     "model": bytes(token_info.model).decode('utf-8', errors='ignore').strip(),
                     "serial_number": bytes(token_info.serialNumber).decode('utf-8', errors='ignore').strip(),
                     "hardware_version": f"{token_info.hardwareVersion.major}.{token_info.hardwareVersion.minor}",
-                    "firmware_version": f"{token_info.firmwareVersion.major}.{token_info.firmwareVersion.minor}",
-                    "user_memory": "100 KB Secure EEPROM (IS-16695)"
+                    "firmware_version": f"{token_info.firmwareVersion.major}.{token_info.firmwareVersion.minor}"
                 }
         else:
             result["hardware_dongle_present"] = False
             result["slots_count"] = 0
-            result["status_msg"] = "Physical USB dongle not plugged into USB port. Emulated TrusToken active."
+            result["status_msg"] = "Physical USB dongle not plugged into USB port."
     except Exception as e:
         result["error"] = str(e)
     
     return result
 
 # ==============================================================================
-# LAB PKI CA & CERTIFICATE GENERATOR / STORAGE
-# Enforces Lab Director (PI) & Lab Member hierarchy
+# STORAGE AND PASSWORDS
 # ==============================================================================
 
+DB_FILE = os.path.join(DATA_DIR, "trusmeet.db")
 LAB_CA_KEY_FILE = os.path.join(DATA_DIR, "lab_ca.key")
 LAB_CA_CERT_FILE = os.path.join(DATA_DIR, "lab_ca.crt")
-TOKENS_DB_FILE = os.path.join(DATA_DIR, "trustokens.json")
+
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 15, 8, 1
+SCRYPT_MAXMEM = 64 * 1024 * 1024
+MIN_PASSWORD_LENGTH = 10
+MAX_PASSWORD_LENGTH = 256
+MAX_FAILED_LOGINS = 5
+LOCK_SECONDS = 15 * 60
+USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{2,31}$")
+BAD_LOGIN = "Incorrect username or password."
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    priv_encrypted_pem TEXT NOT NULL,
+    cert_pem TEXT NOT NULL,
+    cert_serial TEXT NOT NULL,
+    has_token INTEGER,
+    failed_logins INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+)
+"""
+
+
+def fail(message):
+    return {"success": False, "error": message}
+
+
+def connect():
+    if not os.path.exists(DB_FILE):
+        os.close(os.open(DB_FILE, os.O_WRONLY | os.O_CREAT, 0o600))
+    conn = sqlite3.connect(DB_FILE, timeout=30, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(SCHEMA)
+    return conn
+
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
+                            maxmem=SCRYPT_MAXMEM, dklen=32)
+    return "scrypt${}${}${}${}${}".format(SCRYPT_N, SCRYPT_R, SCRYPT_P,
+                                          base64.b64encode(salt).decode(), base64.b64encode(digest).decode())
+
+
+def password_matches(password, stored):
+    _, n, r, p, salt, digest = stored.split("$")
+    computed = hashlib.scrypt(password.encode("utf-8"), salt=base64.b64decode(salt), n=int(n), r=int(r), p=int(p),
+                              maxmem=SCRYPT_MAXMEM, dklen=32)
+    return hmac.compare_digest(computed, base64.b64decode(digest))
+
+
+def text_field(payload, name):
+    value = payload.get(name)
+    return value if isinstance(value, str) else ""
+
+
+def check_new_password(password):
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return f"Password must be at least {MIN_PASSWORD_LENGTH} characters."
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return f"Password must be at most {MAX_PASSWORD_LENGTH} characters."
+    return None
+
+
+def public_profile(row):
+    has_token = row["has_token"]
+    return {
+        "user_id": row["username"],
+        "name": row["display_name"],
+        "has_token": None if has_token is None else bool(has_token),
+    }
+
+
+def authenticate(conn, username, password):
+    """Returns (row, None) on success, or (None, error message).
+
+    The attempt is counted before the password is checked, so parallel guesses
+    cannot get past the limit.
+    """
+    row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if row is None:
+        hash_password(password or "x")  # Takes the same time as a real check.
+        return None, BAD_LOGIN
+
+    now = int(time.time())
+    charged = conn.execute(
+        """UPDATE users
+           SET locked_until = CASE WHEN failed_logins + 1 >= ? THEN ? ELSE locked_until END,
+               failed_logins = CASE WHEN failed_logins + 1 >= ? THEN 0 ELSE failed_logins + 1 END
+           WHERE username = ? AND locked_until <= ?""",
+        (MAX_FAILED_LOGINS, now + LOCK_SECONDS, MAX_FAILED_LOGINS, username, now),
+    ).rowcount
+    if not charged:
+        return None, "Too many attempts for this account. Try again in 15 minutes."
+
+    if not password_matches(password, row["password_hash"]):
+        return None, BAD_LOGIN
+
+    conn.execute("UPDATE users SET failed_logins = 0, locked_until = 0 WHERE username = ?", (username,))
+    return row, None
+
+
+# ==============================================================================
+# CERTIFICATE AUTHORITY AND USER KEYS
+# ==============================================================================
+
+def write_private_file(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+
+
+def utc_validity(cert):
+    """Returns (not_before, not_after) as timezone-aware datetimes."""
+    return (cert.not_valid_before.replace(tzinfo=datetime.timezone.utc),
+            cert.not_valid_after.replace(tzinfo=datetime.timezone.utc))
+
 
 def get_or_create_lab_ca():
-    """Initializes or loads the Lab Root CA certificate."""
     if os.path.exists(LAB_CA_KEY_FILE) and os.path.exists(LAB_CA_CERT_FILE):
         with open(LAB_CA_KEY_FILE, "rb") as f:
             ca_key = serialization.load_pem_private_key(f.read(), password=None)
@@ -156,413 +280,234 @@ def get_or_create_lab_ca():
         return ca_key, ca_cert
 
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
-    subject = issuer = x509.Name([
+    name = x509.Name([
         x509.NameAttribute(NameOID.COUNTRY_NAME, "IN"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Chhattisgarh"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, "Bhilai"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "IIT Bhilai - de.ci.phe.red LAB"),
-        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "Applied Cryptography & Security"),
-        x509.NameAttribute(NameOID.COMMON_NAME, "TrusToken Lab Root CA (IS-16695)"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "TrusMeet"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "TrusMeet Root CA"),
     ])
-    
     now = datetime.datetime.now(datetime.timezone.utc)
     ca_cert = (
         x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
+        .subject_name(name)
+        .issuer_name(name)
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=3650))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False,
-            ),
+            x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False,
+                          data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True,
+                          encipher_only=False, decipher_only=False),
             critical=True,
         )
         .sign(ca_key, hashes.SHA256())
     )
-
-    with open(LAB_CA_KEY_FILE, "wb") as f:
-        f.write(ca_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        ))
+    write_private_file(LAB_CA_KEY_FILE, ca_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ))
     with open(LAB_CA_CERT_FILE, "wb") as f:
         f.write(ca_cert.public_bytes(serialization.Encoding.PEM))
-
     return ca_key, ca_cert
 
-def generate_token_profile(user_id, name, role, email, pin, key_type="RSA-2048"):
-    """
-    Creates an on-chip key pair and X.509 certificate signed by the Lab CA.
-    Stores the private key encrypted with the token hardware PIN.
-    """
+
+def issue_signing_key(username, display_name, password):
+    """Creates a P-256 key, locked with the password, and a CA-signed certificate."""
     ca_key, ca_cert = get_or_create_lab_ca()
-
-    if key_type == "ECC-256":
-        private_key = ec.generate_private_key(ec.SECP256R1())
-    else:
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-    subject = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, "IN"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "IIT Bhilai - C-DAC Research Lab"),
-        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, f"Lab Role: {role}"),
-        x509.NameAttribute(NameOID.COMMON_NAME, name),
-        x509.NameAttribute(NameOID.EMAIL_ADDRESS, email),
-    ])
-
+    private_key = ec.generate_private_key(ec.SECP256R1())
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
-        .subject_name(subject)
+        .subject_name(x509.Name([
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "TrusMeet"),
+            x509.NameAttribute(NameOID.USER_ID, username),
+            x509.NameAttribute(NameOID.COMMON_NAME, display_name),
+        ]))
         .issuer_name(ca_cert.subject)
         .public_key(private_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=730))
         .add_extension(
-            x509.KeyUsage(
-                digital_signature=True,
-                content_commitment=True,
-                key_encipherment=True,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=False,
-                crl_sign=False,
-                encipher_only=False,
-                decipher_only=False,
-            ),
+            x509.KeyUsage(digital_signature=True, content_commitment=True, key_encipherment=False,
+                          data_encipherment=False, key_agreement=False, key_cert_sign=False, crl_sign=False,
+                          encipher_only=False, decipher_only=False),
             critical=True,
-        )
-        .add_extension(
-            x509.ExtendedKeyUsage([
-                x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH,
-                x509.oid.ExtendedKeyUsageOID.CODE_SIGNING,
-                x509.oid.ExtendedKeyUsageOID.EMAIL_PROTECTION,
-            ]),
-            critical=False,
         )
         .sign(ca_key, hashes.SHA256())
     )
-
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode('utf-8')
-    priv_pem = private_key.private_bytes(
+    encrypted = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.BestAvailableEncryption(pin.encode('utf-8')),
-    ).decode('utf-8')
+        encryption_algorithm=serialization.BestAvailableEncryption(password.encode("utf-8")),
+    ).decode("utf-8")
+    return encrypted, cert.public_bytes(serialization.Encoding.PEM).decode("utf-8"), hex(cert.serial_number)
 
-    pub_pem = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode('utf-8')
 
-    token_serial = f"TT-IN-{hashlib.sha256((user_id + email).encode()).hexdigest()[:8].upper()}"
+# ==============================================================================
+# COMMANDS
+# ==============================================================================
 
-    profile = {
-        "user_id": user_id,
-        "name": name,
-        "role": role,
-        "email": email,
-        "token_serial": token_serial,
-        "key_type": key_type,
-        "cert_serial": hex(cert.serial_number),
-        "cert_pem": cert_pem,
-        "pub_pem": pub_pem,
-        "priv_encrypted_pem": priv_pem,
-        "pin_hash": hashlib.sha256(pin.encode('utf-8')).hexdigest(),
-        "created_at": now.isoformat(),
-        "valid_until": (now + datetime.timedelta(days=730)).isoformat(),
-        "pin_retries_left": 5,
-        "locked": False
+def register(payload):
+    username = text_field(payload, "username").strip().lower()
+    display_name = " ".join(text_field(payload, "name").split())
+    password = text_field(payload, "password")
+
+    if not USERNAME_PATTERN.match(username):
+        return fail("Username must be 3-32 characters: letters, numbers, dot, dash or underscore.")
+    if not 1 <= len(display_name) <= 60 or any(ord(c) < 32 or ord(c) == 127 for c in display_name):
+        return fail("Please enter a name of up to 60 characters.")
+    problem = check_new_password(password)
+    if problem:
+        return fail(problem)
+
+    conn = connect()
+    if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+        return fail("That username is taken.")
+
+    encrypted, cert_pem, cert_serial = issue_signing_key(username, display_name, password)
+    try:
+        conn.execute(
+            """INSERT INTO users (username, display_name, password_hash, priv_encrypted_pem, cert_pem, cert_serial, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (username, display_name, hash_password(password), encrypted, cert_pem, cert_serial,
+             datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        )
+    except sqlite3.IntegrityError:
+        return fail("That username is taken.")
+    row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    return {"success": True, "profile": public_profile(row)}
+
+
+def login(payload):
+    conn = connect()
+    row, error = authenticate(conn, text_field(payload, "username").strip().lower(), text_field(payload, "password"))
+    if error:
+        return fail(error)
+    return {"success": True, "profile": public_profile(row)}
+
+
+def set_token_choice(payload):
+    has_token = payload.get("has_token")
+    if not isinstance(has_token, bool):
+        return fail("has_token must be true or false")
+    updated = connect().execute("UPDATE users SET has_token = ? WHERE username = ?",
+                                (int(has_token), text_field(payload, "username"))).rowcount
+    return {"success": True} if updated else fail("Account not found.")
+
+
+def sign_minutes(payload):
+    conn = connect()
+    row, error = authenticate(conn, text_field(payload, "username"), text_field(payload, "password"))
+    if error:
+        return fail(error)
+
+    signed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    document_sha256 = hashlib.sha256(text_field(payload, "minutes_text").encode("utf-8")).hexdigest()
+    # The signature covers the meeting, the time and the token status, not just the text.
+    signed_payload = json.dumps({
+        "version": 2,
+        "meeting_id": text_field(payload, "meeting_id"),
+        "signed_at": signed_at,
+        "signer": row["username"],
+        "signer_name": row["display_name"],
+        "assurance": text_field(payload, "assurance"),
+        "document_sha256": document_sha256,
+    }, sort_keys=True, separators=(",", ":"))
+
+    private_key = serialization.load_pem_private_key(row["priv_encrypted_pem"].encode("utf-8"),
+                                                     password=text_field(payload, "password").encode("utf-8"))
+    signature = private_key.sign(signed_payload.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    return {
+        "success": True,
+        "signed_payload": signed_payload,
+        "signature_b64": base64.b64encode(signature).decode("utf-8"),
+        "document_sha256": document_sha256,
+        "algorithm": "ECDSA-SHA256 (NIST P-256)",
+        "signed_by": row["display_name"],
+        "assurance": text_field(payload, "assurance"),
+        "meeting_id": text_field(payload, "meeting_id"),
+        "cert_serial": row["cert_serial"],
+        "cert_pem": row["cert_pem"],
+        "timestamp": signed_at,
+        "signature_type": "Raw signature from a software key. Not made by the USB token.",
     }
 
-    return profile
 
-def init_default_tokens():
-    """Initializes standard profiles: PI, Lead Researcher, PhD Scholar, Guest."""
-    if os.path.exists(TOKENS_DB_FILE):
-        try:
-            with open(TOKENS_DB_FILE, "r") as f:
-                data = json.load(f)
-                if len(data) >= 3:
-                    return data
-        except Exception:
-            pass
-
-    default_members = [
-        {
-            "user_id": "dhiman_saha",
-            "name": "Dr. Dhiman Saha",
-            "role": "Principal Investigator (PI) - Head, de.ci.phe.red LAB",
-            "email": "dhiman@iitbhilai.ac.in",
-            "pin": "123456",
-            "key_type": "RSA-4096"
-        },
-        {
-            "user_id": "krishna_saha",
-            "name": "Krishna Saha",
-            "role": "Security Researcher - de.ci.phe.red LAB",
-            "email": "krishna.saha@iitbhilai.ac.in",
-            "pin": "123456",
-            "key_type": "RSA-2048"
-        },
-        {
-            "user_id": "lab_scholar_1",
-            "name": "Sahiba Suryawanshi",
-            "role": "PhD Scholar - de.ci.phe.red LAB",
-            "email": "sahiba@iitbhilai.ac.in",
-            "pin": "123456",
-            "key_type": "ECC-256"
-        },
-        {
-            "user_id": "lab_scholar_2",
-            "name": "Shashwat Jaiswal",
-            "role": "Research Scholar - de.ci.phe.red LAB",
-            "email": "shashwat@iitbhilai.ac.in",
-            "pin": "123456",
-            "key_type": "RSA-2048"
-        }
-    ]
-
-    tokens_db = {}
-    for m in default_members:
-        profile = generate_token_profile(
-            user_id=m["user_id"],
-            name=m["name"],
-            role=m["role"],
-            email=m["email"],
-            pin=m["pin"],
-            key_type=m["key_type"]
-        )
-        tokens_db[m["user_id"]] = profile
-
-    with open(TOKENS_DB_FILE, "w") as f:
-        json.dump(tokens_db, f, indent=2)
-
-    return tokens_db
-
-def load_tokens_db():
-    if not os.path.exists(TOKENS_DB_FILE):
-        return init_default_tokens()
+def verify_receipt(payload):
+    """Checks a receipt's signature, and that its certificate came from this CA and is in date."""
     try:
-        with open(TOKENS_DB_FILE, "r") as f:
-            return json.load(f)
+        _, ca_cert = get_or_create_lab_ca()
+        cert = x509.load_pem_x509_certificate(text_field(payload, "cert_pem").encode("utf-8"))
+        cert.verify_directly_issued_by(ca_cert)
+        not_before, not_after = utc_validity(cert)
+        if not not_before <= datetime.datetime.now(datetime.timezone.utc) <= not_after:
+            return {"valid": False, "message": "Certificate is not currently valid"}
+        cert.public_key().verify(base64.b64decode(text_field(payload, "signature_b64")),
+                                 text_field(payload, "signed_payload").encode("utf-8"),
+                                 ec.ECDSA(hashes.SHA256()))
+        return {"valid": True, "message": "Valid signature (software key)"}
     except Exception:
-        return init_default_tokens()
+        return {"valid": False, "message": "Signature or certificate is not valid"}
 
-def save_tokens_db(db):
-    with open(TOKENS_DB_FILE, "w") as f:
-        json.dump(db, f, indent=2)
 
-# ==============================================================================
-# CRYPTOGRAPHIC CHALLENGE-RESPONSE & SIGNING OPERATIONS
-# ==============================================================================
+def admin_reset(username):
+    """Admin command: gives an account a new password and signing key, and clears any lock."""
+    conn = connect()
+    row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if row is None:
+        return fail("Account not found.")
+    password = secrets.token_urlsafe(12)
+    encrypted, cert_pem, cert_serial = issue_signing_key(username, row["display_name"], password)
+    conn.execute(
+        """UPDATE users SET password_hash = ?, priv_encrypted_pem = ?, cert_pem = ?, cert_serial = ?,
+                            failed_logins = 0, locked_until = 0 WHERE username = ?""",
+        (hash_password(password), encrypted, cert_pem, cert_serial, username),
+    )
+    return {"success": True, "username": username, "temporary_password": password}
 
-def perform_token_sign(user_id, pin, payload_bytes):
-    """
-    Simulates the on-chip C_Sign cryptographic operation after PIN verification.
-    The private key never leaves the encrypted container without PIN.
-    """
-    db = load_tokens_db()
-    if user_id not in db:
-        return {"success": False, "error": f"Token for user '{user_id}' not found"}
 
-    profile = db[user_id]
-    if profile.get("locked"):
-        return {"success": False, "error": "TrusToken is LOCKED due to excessive failed PIN attempts"}
+def init():
+    os.chmod(DATA_DIR, 0o700)
+    connect().close()
+    get_or_create_lab_ca()
+    return {"success": True}
 
-    input_pin_hash = hashlib.sha256(pin.encode('utf-8')).hexdigest()
-    if input_pin_hash != profile["pin_hash"]:
-        profile["pin_retries_left"] = max(0, profile.get("pin_retries_left", 5) - 1)
-        if profile["pin_retries_left"] == 0:
-            profile["locked"] = True
-        save_tokens_db(db)
-        return {
-            "success": False,
-            "error": f"Incorrect Hardware PIN. Retries remaining: {profile['pin_retries_left']}",
-            "retries_left": profile["pin_retries_left"]
-        }
 
-    # Reset retries on success
-    profile["pin_retries_left"] = 5
-    save_tokens_db(db)
+COMMANDS = {
+    "register": register,
+    "login": login,
+    "set-token-choice": set_token_choice,
+    "sign-minutes": sign_minutes,
+    "verify-receipt": verify_receipt,
+}
 
-    # Unlock private key with PIN
-    try:
-        priv_bytes = profile["priv_encrypted_pem"].encode('utf-8')
-        priv_key = serialization.load_pem_private_key(priv_bytes, password=pin.encode('utf-8'))
-        
-        # Sign payload
-        if profile["key_type"] == "ECC-256":
-            signature = priv_key.sign(payload_bytes, ec.ECDSA(hashes.SHA256()))
-            algorithm = "ECDSA-SHA256 (NIST P-256)"
-        else:
-            signature = priv_key.sign(
-                payload_bytes,
-                padding.PKCS1v15(),
-                hashes.SHA256()
-            )
-            algorithm = "RSA-PKCS#1v1.5-SHA256 (2048-bit)"
-
-        sig_b64 = base64.b64encode(signature).decode('utf-8')
-        return {
-            "success": True,
-            "signature_b64": sig_b64,
-            "algorithm": algorithm,
-            "token_serial": profile["token_serial"],
-            "cert_serial": profile["cert_serial"],
-            "cert_pem": profile["cert_pem"],
-            "user_id": profile["user_id"],
-            "name": profile["name"],
-            "role": profile["role"]
-        }
-    except Exception as e:
-        return {"success": False, "error": f"Cryptographic operation failed: {str(e)}"}
-
-def verify_token_signature(cert_pem, payload_bytes, signature_b64):
-    """
-    Verifies that a signature was authentically produced by the TrusToken certificate.
-    """
-    try:
-        cert = x509.load_pem_x509_certificate(cert_pem.encode('utf-8'))
-        pub_key = cert.public_key()
-        sig_bytes = base64.b64decode(signature_b64)
-
-        if isinstance(pub_key, ec.EllipticCurvePublicKey):
-            pub_key.verify(sig_bytes, payload_bytes, ec.ECDSA(hashes.SHA256()))
-        elif isinstance(pub_key, rsa.RSAPublicKey):
-            pub_key.verify(sig_bytes, payload_bytes, padding.PKCS1v15(), hashes.SHA256())
-        else:
-            return False, "Unsupported key type"
-
-        # Verify certificate is not expired
-        now = datetime.datetime.now(datetime.timezone.utc)
-        nb = cert.not_valid_before.replace(tzinfo=datetime.timezone.utc) if cert.not_valid_before.tzinfo is None else cert.not_valid_before
-        na = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc) if cert.not_valid_after.tzinfo is None else cert.not_valid_after
-        if now < nb or now > na:
-            return False, "TrusToken X.509 Certificate is expired"
-
-        return True, "Valid C-DAC TrusToken Cryptographic Signature"
-    except Exception as e:
-        return False, str(e)
-
-# ==============================================================================
-# CLI COMMAND ROUTER
-# ==============================================================================
 
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No action specified"}))
         sys.exit(1)
 
-    cmd = sys.argv[1]
+    command = sys.argv[1]
+    try:
+        if command == "hardware-status":
+            result = check_hardware_token()
+        elif command == "init":
+            result = init()
+        elif command == "admin-reset" and len(sys.argv) == 3:
+            result = admin_reset(sys.argv[2].strip().lower())
+        elif command in COMMANDS:
+            payload = json.loads(sys.stdin.read() or "{}")
+            result = COMMANDS[command](payload if isinstance(payload, dict) else {})
+        else:
+            result = fail(f"Unknown command {command}")
+    except Exception as exc:
+        print(f"{command} failed: {type(exc).__name__}", file=sys.stderr)
+        result = fail("The server could not complete that request.")
+    print(json.dumps(result))
 
-    if cmd == "hardware-status":
-        res = check_hardware_token()
-        print(json.dumps(res))
-
-    elif cmd == "list-tokens":
-        init_default_tokens()
-        db = load_tokens_db()
-        # Return sanitized profiles (no encrypted private key)
-        sanitized = []
-        for k, v in db.items():
-            sanitized.append({
-                "user_id": v["user_id"],
-                "name": v["name"],
-                "role": v["role"],
-                "email": v["email"],
-                "token_serial": v["token_serial"],
-                "key_type": v["key_type"],
-                "cert_serial": v["cert_serial"],
-                "valid_until": v["valid_until"],
-                "locked": v.get("locked", False),
-                "cert_pem": v["cert_pem"]
-            })
-        print(json.dumps({"success": True, "tokens": sanitized}))
-
-    elif cmd == "sign-challenge":
-        # Args: user_id, pin, challenge_string
-        if len(sys.argv) < 5:
-            print(json.dumps({"success": False, "error": "Usage: sign-challenge <user_id> <pin> <challenge>"}))
-            sys.exit(1)
-        user_id = sys.argv[2]
-        pin = sys.argv[3]
-        challenge = sys.argv[4].encode('utf-8')
-        res = perform_token_sign(user_id, pin, challenge)
-        print(json.dumps(res))
-
-    elif cmd == "verify-signature":
-        # Args: payload_string, signature_b64, cert_pem_or_user_id
-        if len(sys.argv) < 5:
-            print(json.dumps({"success": False, "error": "Usage: verify-signature <payload> <sig_b64> <user_id_or_cert>"}))
-            sys.exit(1)
-        payload = sys.argv[2].encode('utf-8')
-        sig_b64 = sys.argv[3]
-        id_or_cert = sys.argv[4]
-
-        db = load_tokens_db()
-        cert_pem = id_or_cert
-        if id_or_cert in db:
-            cert_pem = db[id_or_cert]["cert_pem"]
-
-        valid, msg = verify_token_signature(cert_pem, payload, sig_b64)
-        print(json.dumps({"valid": valid, "message": msg}))
-
-    elif cmd == "sign-minutes":
-        # Digitally sign meeting minutes
-        # Args: user_id, pin, minutes_json_b64
-        if len(sys.argv) < 5:
-            print(json.dumps({"success": False, "error": "Usage: sign-minutes <user_id> <pin> <minutes_b64>"}))
-            sys.exit(1)
-        user_id = sys.argv[2]
-        pin = sys.argv[3]
-        minutes_raw = base64.b64decode(sys.argv[4]).decode('utf-8')
-        
-        # Calculate SHA-256 digest of minutes document
-        doc_hash = hashlib.sha256(minutes_raw.encode('utf-8')).hexdigest()
-        sign_payload = f"TRUSTOKEN_DOC_SIGN:SHA256:{doc_hash}".encode('utf-8')
-        
-        sign_res = perform_token_sign(user_id, pin, sign_payload)
-        if not sign_res["success"]:
-            print(json.dumps(sign_res))
-            sys.exit(0)
-
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        receipt = {
-            "success": True,
-            "document_sha256": doc_hash,
-            "signature_b64": sign_res["signature_b64"],
-            "algorithm": sign_res["algorithm"],
-            "signed_by": sign_res["name"],
-            "signer_role": sign_res["role"],
-            "token_serial": sign_res["token_serial"],
-            "cert_serial": sign_res["cert_serial"],
-            "timestamp": timestamp,
-            "compliance": "IS-16695 Part 1 & 2 / PKCS#7 Digital Signature",
-            "verification_status": "AUTHENTIC_HARDWARE_SIGNATURE"
-        }
-        print(json.dumps(receipt))
-
-    elif cmd == "init-tokens":
-        init_default_tokens()
-        print(json.dumps({"success": True, "message": "Tokens initialized"}))
-
-    else:
-        print(json.dumps({"error": f"Unknown command {cmd}"}))
 
 if __name__ == "__main__":
     main()

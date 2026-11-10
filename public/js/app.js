@@ -11,13 +11,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     trustoken: new TrusTokenClient(),
     currentUser: null,
     currentRoomId: null,
+    inMeeting: false,
+    joinedWithToken: false,
     isHost: false,
-    selectedTokenId: 'krishna_saha',
+    isLocked: false,
+    myAssurance: 'unverified',
     audioMuted: false,
     videoMuted: false,
     isRecording: false,
     activeDrawer: null,
-    peerStreams: new Map() // peerId -> { stream, user, tileElement }
+    peerStreams: new Map(), // peerId -> { stream, user, tileElement }
+    roster: new Map(), // peerId -> user
+    mutedPeers: new Set(), // peerIds whose microphone is off
+    pendingAdmissions: new Map(), // peerId -> { user, removedEarlier }
+    tokenStatus: { helperRunning: false, present: false },
+    tokenStatusKnown: false,
+    meetingEnded: false,
+    reconnecting: false
   };
 
   // DOM Elements
@@ -31,16 +41,35 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Lobby
     lobbyView: document.getElementById('lobby-view'),
-    memberCardsGrid: document.getElementById('member-cards-grid'),
+    authSection: document.getElementById('auth-section'),
+    accountSection: document.getElementById('account-section'),
+    tabLogin: document.getElementById('tab-login'),
+    tabSignup: document.getElementById('tab-signup'),
+    loginForm: document.getElementById('login-form'),
+    signupForm: document.getElementById('signup-form'),
+    loginUsername: document.getElementById('login-username'),
+    loginPassword: document.getElementById('login-password'),
+    signupName: document.getElementById('signup-name'),
+    signupUsername: document.getElementById('signup-username'),
+    signupPassword: document.getElementById('signup-password'),
+    signupCode: document.getElementById('signup-code'),
+    authError: document.getElementById('auth-error'),
+    tokenSummary: document.getElementById('token-summary'),
+    btnTokenSetup: document.getElementById('btn-token-setup'),
+    btnLogout: document.getElementById('btn-logout'),
+    btnCreateRoom: document.getElementById('btn-create-room'),
+    inputNewRoomName: document.getElementById('new-room-name'),
+    newMeetingPanel: document.getElementById('new-meeting-panel'),
+    newMeetingLink: document.getElementById('new-meeting-link'),
+    btnCopyNewLink: document.getElementById('btn-copy-new-link'),
+    btnStartNewMeeting: document.getElementById('btn-start-new-meeting'),
+    inputJoinRoom: document.getElementById('join-room-input'),
+    btnJoinRoom: document.getElementById('btn-join-room'),
+    roomListContainer: document.getElementById('room-list-container'),
     previewVideo: document.getElementById('preview-video'),
     previewAudioMeter: document.getElementById('preview-audio-meter'),
     togglePreviewMicBtn: document.getElementById('btn-preview-mic'),
     togglePreviewCamBtn: document.getElementById('btn-preview-cam'),
-    btnAuthToken: document.getElementById('btn-auth-token'),
-    authStatusText: document.getElementById('auth-status-text'),
-    roomListContainer: document.getElementById('room-list-container'),
-    btnCreateRoom: document.getElementById('btn-create-room'),
-    inputNewRoomName: document.getElementById('new-room-name'),
 
     // Conference
     conferenceView: document.getElementById('conference-view'),
@@ -78,19 +107,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     participantsList: document.getElementById('participants-list'),
 
     // Modals
-    pinModal: document.getElementById('pin-modal'),
-    pinDigits: [
-      document.getElementById('pin-1'),
-      document.getElementById('pin-2'),
-      document.getElementById('pin-3'),
-      document.getElementById('pin-4'),
-      document.getElementById('pin-5'),
-      document.getElementById('pin-6')
-    ],
-    btnSubmitPin: document.getElementById('btn-submit-pin'),
-    btnCancelPin: document.getElementById('btn-cancel-pin'),
-    pinModalSubtitle: document.getElementById('pin-modal-subtitle'),
-    pinErrorMsg: document.getElementById('pin-error-msg'),
+    passwordModal: document.getElementById('password-modal'),
+    passwordModalSubtitle: document.getElementById('password-modal-subtitle'),
+    passwordInput: document.getElementById('password-input'),
+    passwordError: document.getElementById('password-error'),
+    btnSubmitPassword: document.getElementById('btn-submit-password'),
+    btnCancelPassword: document.getElementById('btn-cancel-password'),
+    choiceModal: document.getElementById('choice-modal'),
+    choiceTitle: document.getElementById('choice-title'),
+    choiceMessage: document.getElementById('choice-message'),
+    btnChoicePrimary: document.getElementById('btn-choice-primary'),
+    btnChoiceSecondary: document.getElementById('btn-choice-secondary'),
+    waitingModal: document.getElementById('waiting-modal'),
+    waitingMessage: document.getElementById('waiting-message'),
+    btnWaitingLeave: document.getElementById('btn-waiting-leave'),
+    tokenGateModal: document.getElementById('token-gate-modal'),
+    tokenGateTitle: document.getElementById('token-gate-title'),
+    tokenGateMessage: document.getElementById('token-gate-message'),
+    btnTokenGateRejoin: document.getElementById('btn-token-gate-rejoin'),
+    btnTokenGateLobby: document.getElementById('btn-token-gate-lobby'),
+
+    // Host tools
+    admissionPanel: document.getElementById('admission-panel'),
+    admissionList: document.getElementById('admission-list'),
+    hostControls: document.getElementById('host-controls'),
+    btnLockRoom: document.getElementById('btn-lock-room'),
+    btnEndMeeting: document.getElementById('btn-end-meeting'),
+    confRoomIdTag: document.getElementById('conf-room-id-tag'),
+    confAssuranceTag: document.getElementById('conf-assurance-tag'),
 
     // Toast Container
     toastContainer: document.getElementById('toast-container')
@@ -104,7 +148,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (type === 'success') icon = '🛡️';
     if (type === 'warning') icon = '⚠️';
     if (type === 'error') icon = '🚨';
-    toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+    const iconEl = document.createElement('span');
+    iconEl.textContent = icon;
+    const messageEl = document.createElement('span');
+    messageEl.textContent = message;
+    toast.append(iconEl, ' ', messageEl);
     els.toastContainer.appendChild(toast);
     setTimeout(() => {
       toast.style.opacity = '0';
@@ -120,313 +168,464 @@ document.addEventListener('DOMContentLoaded', async () => {
     (peerId, volume, isSpeaking) => onActiveSpeakerDetected(peerId, volume, isSpeaking)
   );
 
-  // 2. Fetch TrusToken Hardware Status & Available Member Profiles
-  async function loadTokenInfo() {
-    const statusData = await state.trustoken.fetchStatus();
-    if (!statusData) return;
+  // 2. Watch the USB Token on This Computer
+  const ASSURANCE_LABELS = {
+    verified: 'Verified',
+    'token-detected': 'Token Detected',
+    unverified: 'Unverified'
+  };
 
-    const hw = statusData.hardware;
-    if (hw?.hardware_dongle_present) {
-      els.tokenStatusPill.className = 'token-pill connected';
-      els.tokenStatusPill.innerHTML = `
-        <span class="pulse-dot"></span>
-        <span>C-DAC TrusToken USB (IS-16695)</span>
-      `;
-    } else {
-      els.tokenStatusPill.className = 'token-pill emulated';
-      els.tokenStatusPill.innerHTML = `
-        <span class="pulse-dot"></span>
-        <span>TrusToken PKI (PKCS#11 v2.20)</span>
-      `;
+  function assuranceLabel(assurance) {
+    return ASSURANCE_LABELS[assurance] || ASSURANCE_LABELS.unverified;
+  }
+
+  function assuranceStyle(assurance) {
+    return assurance === 'unverified' || !ASSURANCE_LABELS[assurance] ? 'is-unverified' : 'is-detected';
+  }
+
+  function assuranceBadge(assurance) {
+    return `<span class="assurance-badge ${assuranceStyle(assurance)}">${escapeHtml(assuranceLabel(assurance))}</span>`;
+  }
+  function tokenProblemMessage(status) {
+    if (status.helperRunning) {
+      return 'TrusToken is not plugged in. Plug it into this computer.';
     }
-
-    renderMemberProfiles(statusData.tokens);
-    renderDiagnosticHub(hw);
+    if (status.waiting) {
+      return 'Chrome is asking for permission to reach the TrusToken helper. Click Allow at the top of this window.';
+    }
+    if (status.permission === 'denied') {
+      return 'Chrome is blocking the TrusToken helper. Click the icon to the left of the address bar, allow local network access, then reload this page.';
+    }
+    if (status.permission === 'prompt') {
+      return 'Could not reach the TrusToken helper. Start it on this computer with: python3 trustoken_agent.py. If Chrome asks for local network access, click Allow.';
+    }
+    return 'TrusToken helper is not running. Start it on this computer with: python3 trustoken_agent.py';
   }
 
-  // Render enrolled member cards
-  function renderMemberProfiles(tokens) {
-    els.memberCardsGrid.innerHTML = '';
-    tokens.forEach((t) => {
-      const card = document.createElement('div');
-      card.className = `member-card-option ${t.user_id === state.selectedTokenId ? 'selected' : ''}`;
-      card.dataset.userId = t.user_id;
-
-      card.innerHTML = `
-        <div class="member-card-name">${t.name}</div>
-        <div class="member-card-role">${t.role}</div>
-        <div class="member-card-serial">Key: ${t.key_type} | ${t.token_serial}</div>
-      `;
-
-      card.addEventListener('click', () => {
-        document.querySelectorAll('.member-card-option').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        state.selectedTokenId = t.user_id;
-      });
-
-      els.memberCardsGrid.appendChild(card);
-    });
+  function tokenStatusLabel(status) {
+    if (status.present) return 'TrusToken plugged in';
+    if (status.helperRunning) return 'TrusToken not plugged in';
+    if (status.waiting) return 'Allow access in Chrome';
+    if (status.permission === 'denied') return 'Chrome is blocking TrusToken helper';
+    if (status.permission === 'prompt') return 'Cannot reach TrusToken helper';
+    return 'TrusToken helper not running';
   }
 
-  // Render Hardware Diagnostic Drawer
-  function renderDiagnosticHub(hw) {
+  let tokenWatcher = null;
+
+  function onTokenStatus(status) {
+    const changed = !state.tokenStatusKnown
+      || tokenStatusLabel(status) !== tokenStatusLabel(state.tokenStatus);
+    state.tokenStatus = status;
+    state.tokenStatusKnown = true;
+
+    if (changed) renderTokenStatus();
+    if (tokenWatcher) tokenWatcher(status);
+
+    if (state.meetingEnded || !state.inMeeting || !state.joinedWithToken) return;
+    // A slow check is not proof the token is gone. The server's lease covers a real stall.
+    if (status.waiting) return;
+    state.socket.emit('token-presence', { present: status.present });
+    if (!status.present) {
+      endMeeting('TrusToken Disconnected', `${tokenProblemMessage(status)} Then rejoin, or ask the host to accept you as unverified.`);
+    }
+  }
+
+  function renderTokenStatus() {
+    const user = state.currentUser;
+    const usesToken = Boolean(user && user.has_token);
+    const present = usesToken && state.tokenStatus.present;
+    let label = 'Not logged in';
+    if (user) label = usesToken ? tokenStatusLabel(state.tokenStatus) : 'Unverified: no USB token';
+
+    els.tokenStatusPill.className = `token-pill ${present ? 'connected' : 'disconnected'}`;
+    els.tokenStatusPill.innerHTML = `
+      <span class="pulse-dot"></span>
+      <span>${escapeHtml(label)}</span>
+    `;
+    if (user) {
+      els.tokenSummary.textContent = usesToken
+        ? `USB token: ${tokenStatusLabel(state.tokenStatus)}. With it plugged in, you enter meetings directly.`
+        : 'No USB token added. You can join meetings as an unverified user after the host accepts you.';
+      els.btnTokenSetup.textContent = usesToken ? 'Change Token Setting' : 'Add USB Token';
+    }
+    renderDiagnosticHub();
+  }
+
+  function renderDiagnosticHub() {
     const hubBody = document.getElementById('security-hub-body');
     if (!hubBody) return;
+    const present = state.tokenStatus.present;
+    const usesToken = Boolean(state.currentUser && state.currentUser.has_token);
 
     hubBody.innerHTML = `
       <div class="trustoken-card" style="box-shadow:none;">
-        <div style="font-weight:700; color:var(--cyan-400); margin-bottom:0.6rem;">C-DAC PKCS#11 DRIVER ARCHITECTURE</div>
+        <div style="font-weight:700; color:var(--cyan-400); margin-bottom:0.6rem;">THIS COMPUTER</div>
         <table class="diag-table">
-          <tr><th>Library Path</th><td>${hw?.library_path || '/usr/local/lib/libtrustokenP11Libv3.3.0.so'}</td></tr>
-          <tr><th>Manufacturer</th><td>${hw?.info?.manufacturer || 'CDAC-Noida (www.cdac.in)'}</td></tr>
-          <tr><th>Standard</th><td>${hw?.info?.standard || 'IS-16695 Part 1 & 2 / ISO-7816'}</td></tr>
-          <tr><th>Cryptoki Version</th><td>v${hw?.info?.cryptoki_version || '2.2'}</td></tr>
-          <tr><th>Physical USB Stick</th><td style="color:${hw?.hardware_dongle_present ? 'var(--emerald-400)' : 'var(--cyan-400)'};">${hw?.hardware_dongle_present ? 'DETECTED ON USB BUS' : 'Active (IS-16695 Soft Module)'}</td></tr>
+          <tr><th>Your Status</th><td>${escapeHtml(assuranceLabel(state.myAssurance))}</td></tr>
+          <tr><th>USB Token</th><td style="color:${usesToken && present ? 'var(--emerald-400)' : 'var(--rose-400)'};">${usesToken ? (present ? 'Plugged in' : 'Not detected') : 'Not used'}</td></tr>
         </table>
       </div>
 
       <div style="background:rgba(30,41,59,0.5); padding:1.25rem; border-radius:14px; border:1px solid var(--border-subtle);">
-        <div style="font-weight:700; color:var(--text-primary); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.5rem;">
-          <span>⚡ Security Liveness & Heartbeat Simulation</span>
-        </div>
-        <p style="font-size:0.82rem; color:var(--text-secondary); line-height:1.45; margin-bottom:1rem;">
-          C-DAC TrusToken supports cryptographic heartbeat. If a lab member removes their USB token mid-meeting, audio/video are automatically cut off to protect lab confidentiality.
+        <div style="font-weight:700; color:var(--text-primary); margin-bottom:0.5rem;">What the Badges Mean</div>
+        <p style="font-size:0.82rem; color:var(--text-secondary); line-height:1.45;">
+          <strong>Token Detected</strong> means a device with the TrusToken USB ID was reported by that person's computer. It does not prove who they are, and a modified client can fake it. <strong>Unverified</strong> people were accepted by the host.
         </p>
-        <button id="btn-toggle-dongle-plug" class="btn-secondary" style="width:100%; font-size:0.85rem;">
-          🔌 Simulate Unplugging USB Dongle
-        </button>
-      </div>
-
-      <div style="background:rgba(30,41,59,0.5); padding:1.25rem; border-radius:14px; border:1px solid var(--border-subtle);">
-        <div style="font-weight:700; color:var(--emerald-400); margin-bottom:0.5rem;">Verified Certificate & Key Hierarchy</div>
-        <div style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono); line-height:1.6;">
-          Root CA: TrusToken Lab Root CA (IS-16695)<br/>
-          Signer Algorithm: RSA-PKCS#1v1.5 / ECDSA P-256<br/>
-          Key Storage: On-Chip Container (Never Leaves Device)<br/>
-          BIS Standard: IS-16695 Part 1 & 2 Approved
-        </div>
       </div>
     `;
-
-    document.getElementById('btn-toggle-dongle-plug')?.addEventListener('click', (e) => {
-      const attached = state.trustoken.toggleDongleAttachment();
-      const btn = e.target;
-      if (!attached) {
-        btn.textContent = '🔌 Re-insert TrusToken USB Dongle';
-        btn.style.borderColor = 'var(--rose-500)';
-        btn.style.color = 'var(--rose-400)';
-        showToast('TrusToken USB Dongle Removed! Heartbeat will fail.', 'error');
-      } else {
-        btn.textContent = '🔌 Simulate Unplugging USB Dongle';
-        btn.style.borderColor = 'var(--border-light)';
-        btn.style.color = 'var(--text-primary)';
-        showToast('TrusToken USB Dongle Re-connected!', 'success');
-      }
-    });
   }
+
+  function startTokenWatch() {
+    state.tokenStatusKnown = false;
+    state.trustoken.startPresenceMonitor(onTokenStatus);
+  }
+
+  function renderAccount() {
+    const user = state.currentUser;
+    els.authSection.style.display = user ? 'none' : 'flex';
+    els.accountSection.style.display = user ? 'flex' : 'none';
+    els.userBadge.style.display = user ? 'flex' : 'none';
+    if (user) {
+      els.userNameDisplay.textContent = user.name;
+      els.userRoleDisplay.textContent = `@${user.user_id}`;
+      els.userAvatarDisplay.textContent = user.name.split(' ').map(w => w[0]).join('').slice(0, 2);
+    }
+    renderTokenStatus();
+  }
+
+  // Take this participant out of the meeting and stop their camera, mic and peers.
+  function endMeeting(title, message, { canRejoin = true } = {}) {
+    if (state.meetingEnded) return;
+    state.meetingEnded = true;
+    state.inMeeting = false;
+    stopReconnecting();
+
+    if (timerInterval) clearInterval(timerInterval);
+    state.webrtc.stopVoiceRelay();
+    if (state.isRecording) {
+      state.webrtc.stopRecording();
+      state.isRecording = false;
+    }
+    [...state.peerStreams.keys()].forEach(onRemoteStreamRemoved);
+    state.webrtc.closeAll();
+    els.localVideo.srcObject = null;
+    els.waitingModal.classList.remove('open');
+    els.admissionPanel.style.display = 'none';
+
+    els.tokenGateTitle.textContent = title;
+    els.tokenGateMessage.textContent = message;
+    els.btnTokenGateRejoin.style.display = canRejoin ? 'block' : 'none';
+    els.tokenGateModal.classList.add('open');
+  }
+
+  els.btnTokenGateRejoin.addEventListener('click', () => {
+    window.location.href = `/?room=${encodeURIComponent(state.currentRoomId || '')}`;
+  });
+
+  els.btnTokenGateLobby.addEventListener('click', () => {
+    window.location.href = '/';
+  });
 
   // 3. Lobby Media Preview Setup
-  await state.webrtc.initLocalMedia(els.previewVideo, true, true);
+  // Not awaited: login must work while the browser is still asking for camera access.
+  const mediaReady = state.webrtc.initLocalMedia(els.previewVideo, true, true)
+    .then(() => state.webrtc.setAudioEnabled(!state.audioMuted))
+    .catch((err) => console.error('Could not start camera and microphone:', err));
 
   // Preview Mic / Cam Toggles
-  els.togglePreviewMicBtn.addEventListener('click', () => {
-    state.audioMuted = !state.audioMuted;
-    state.webrtc.setAudioEnabled(!state.audioMuted);
-    els.togglePreviewMicBtn.classList.toggle('muted', state.audioMuted);
-  });
+  els.togglePreviewMicBtn.addEventListener('click', () => setMicMuted(!state.audioMuted));
 
-  els.togglePreviewCamBtn.addEventListener('click', () => {
-    state.videoMuted = !state.videoMuted;
-    state.webrtc.setVideoEnabled(!state.videoMuted);
+  function renderCameraButtons() {
     els.togglePreviewCamBtn.classList.toggle('muted', state.videoMuted);
-  });
+    els.btnToggleCam.classList.toggle('danger', state.videoMuted);
+    els.btnToggleCam.querySelector('span').textContent = state.videoMuted ? 'Start Video' : 'Stop Video';
+  }
 
-  // 4. TrusToken PIN Verification Modal Flow
-  let pinResolve = null;
-  let pinReject = null;
+  async function toggleCamera() {
+    await mediaReady;
+    state.videoMuted = !state.videoMuted;
+    const turningOn = !state.videoMuted;
+    renderCameraButtons();
+    if (state.isRecording) {
+      showToast('This recording continues with audio only.', 'warning');
+    }
+    const applied = await state.webrtc.setVideoEnabled(turningOn);
+    if (!applied && turningOn) {
+      state.videoMuted = true;
+      renderCameraButtons();
+      showToast('Could not turn the camera back on. Check that no other app is using it.', 'error');
+    }
+  }
 
-  function promptPinModal(username) {
+  els.togglePreviewCamBtn.addEventListener('click', toggleCamera);
+
+  // 4. Password and Choice Dialogs
+  let passwordResolve = null;
+  let passwordReject = null;
+
+  function promptPassword(username) {
     return new Promise((resolve, reject) => {
-      pinResolve = resolve;
-      pinReject = reject;
-      els.pinModalSubtitle.innerHTML = `Enter PIN for <strong>${username}</strong>'s TrusToken USB Dongle<br><span style="color:var(--teal-400); font-size:0.75rem; font-weight:600;">(Lab Default PIN: 123456)</span>`;
-      els.pinErrorMsg.textContent = '';
-      const defaultPin = '123456';
-      els.pinDigits.forEach((d, idx) => { d.value = defaultPin[idx] || ''; });
-      els.pinModal.classList.add('open');
-      els.btnSubmitPin.focus();
+      passwordResolve = resolve;
+      passwordReject = reject;
+      els.passwordModalSubtitle.textContent = `Enter the password for ${username} to sign with your software key.`;
+      els.passwordError.textContent = '';
+      els.passwordInput.value = '';
+      els.passwordModal.classList.add('open');
+      els.passwordInput.focus();
     });
   }
 
-  // PIN Input auto-advance
-  els.pinDigits.forEach((digitInput, idx) => {
-    digitInput.addEventListener('input', (e) => {
-      if (e.target.value.length === 1 && idx < 5) {
-        els.pinDigits[idx + 1].focus();
-      }
-    });
-    digitInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Backspace' && e.target.value === '' && idx > 0) {
-        els.pinDigits[idx - 1].focus();
-      }
-      if (e.key === 'Enter') {
-        els.btnSubmitPin.click();
-      }
-    });
+  els.btnCancelPassword.addEventListener('click', () => {
+    els.passwordModal.classList.remove('open');
+    if (passwordReject) passwordReject(new Error('Signing canceled'));
   });
 
-  els.btnCancelPin.addEventListener('click', () => {
-    els.pinModal.classList.remove('open');
-    if (pinReject) pinReject(new Error('PIN prompt canceled'));
-  });
-
-  els.btnSubmitPin.addEventListener('click', () => {
-    const pin = els.pinDigits.map(d => d.value).join('');
-    if (pin.length < 4) {
-      els.pinErrorMsg.textContent = 'Please enter full hardware PIN (e.g. 123456)';
+  els.btnSubmitPassword.addEventListener('click', () => {
+    const password = els.passwordInput.value;
+    if (!password) {
+      els.passwordError.textContent = 'Please enter your password';
       return;
     }
-    els.pinModal.classList.remove('open');
-    if (pinResolve) pinResolve(pin);
+    els.passwordInput.value = '';
+    els.passwordModal.classList.remove('open');
+    if (passwordResolve) passwordResolve(password);
   });
 
-  // 5. Authentication Button Handler
-  els.btnAuthToken.addEventListener('click', async () => {
-    const selectedUserId = state.selectedTokenId;
-    const tokenObj = state.trustoken.enrolledTokens.find(t => t.user_id === selectedUserId);
-    const userName = tokenObj ? tokenObj.name : 'Lab Member';
+  els.passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') els.btnSubmitPassword.click();
+  });
 
+  let choiceResolve = null;
+
+  function askChoice({ title, message, primary, secondary, primaryNeedsToken = false }) {
+    return new Promise((resolve) => {
+      choiceResolve = resolve;
+      els.choiceTitle.textContent = title;
+      els.choiceMessage.textContent = message;
+      els.btnChoicePrimary.textContent = primary;
+      els.btnChoiceSecondary.textContent = secondary;
+      els.btnChoicePrimary.disabled = primaryNeedsToken && !state.tokenStatus.present;
+      tokenWatcher = primaryNeedsToken ? (status) => {
+        els.btnChoicePrimary.disabled = !status.present;
+        els.choiceMessage.textContent = status.present
+          ? 'USB token found. You can continue.'
+          : tokenProblemMessage(status);
+      } : null;
+      els.choiceModal.classList.add('open');
+    });
+  }
+
+  function finishChoice(answer) {
+    els.choiceModal.classList.remove('open');
+    tokenWatcher = null;
+    const resolve = choiceResolve;
+    choiceResolve = null;
+    if (resolve) resolve(answer);
+  }
+
+  els.btnChoicePrimary.addEventListener('click', () => finishChoice('primary'));
+  els.btnChoiceSecondary.addEventListener('click', () => finishChoice('secondary'));
+
+  // Returns true if the USB token is plugged in, or false to continue without it.
+  async function tokenPluggedOrChooseUnverified() {
+    const status = await state.trustoken.checkLocalToken();
+    if (status.present) return true;
+    const answer = await askChoice({
+      title: 'Plug In Your USB Token',
+      message: tokenProblemMessage(status),
+      primary: 'Continue With Token',
+      secondary: 'Continue as Unverified',
+      primaryNeedsToken: true
+    });
+    return answer === 'primary';
+  }
+
+  // Asked once after sign-up, and again whenever the person changes the setting.
+  async function askAboutToken() {
+    const answer = await askChoice({
+      title: 'Do You Have a USB Token?',
+      message: 'With a C-DAC TrusToken plugged in, you enter meetings directly. Without one, you can still join as an unverified user once the host accepts you.',
+      primary: 'Yes, I Have One',
+      secondary: 'No, Continue Unverified'
+    });
+    const hasToken = answer === 'primary';
     try {
-      const pin = await promptPinModal(userName);
-      els.authStatusText.textContent = 'Verifying cryptographic challenge with TrusToken chip...';
-
-      const session = await state.trustoken.authenticateWithToken(selectedUserId, pin);
-      state.currentUser = session;
-
-      // Update Top Nav User Badge
-      els.userBadge.style.display = 'flex';
-      els.userNameDisplay.textContent = session.name;
-      els.userRoleDisplay.textContent = `${session.role} (${session.token_serial})`;
-      els.userAvatarDisplay.textContent = session.name.split(' ').map(w => w[0]).join('').slice(0, 2);
-
-      showToast(`Authenticated as ${session.name} using C-DAC TrusToken!`, 'success');
-      els.authStatusText.textContent = `✅ Authenticated: ${session.name} | ${session.token_serial}`;
-      els.btnAuthToken.style.display = 'none';
-
-      // Check if invited to a specific room (?room=)
-      const urlParams = new URLSearchParams(window.location.search);
-      const inviteRoom = urlParams.get('room');
-      if (inviteRoom) {
-        showToast(`Entering invited lab room: ${inviteRoom}...`, 'success');
-        joinConferenceRoom(inviteRoom);
-      } else {
-        // Load Rooms
-        loadRooms();
-      }
+      await state.trustoken.setTokenChoice(hasToken);
     } catch (err) {
-      showToast(err.message || 'Authentication Failed', 'error');
-      els.authStatusText.textContent = `❌ ${err.message}`;
+      showToast(err.message, 'error');
+      return;
+    }
+    if (hasToken) {
+      startTokenWatch();
+      await tokenPluggedOrChooseUnverified();
+    } else {
+      state.trustoken.stopPresenceMonitor();
+      state.tokenStatus = { helperRunning: false, present: false };
+    }
+    renderAccount();
+  }
+
+  els.btnTokenSetup.addEventListener('click', askAboutToken);
+
+  // 5. Sign Up and Log In
+  function showAuthTab(signup) {
+    els.loginForm.style.display = signup ? 'none' : 'flex';
+    els.signupForm.style.display = signup ? 'flex' : 'none';
+    els.tabLogin.classList.toggle('active', !signup);
+    els.tabSignup.classList.toggle('active', signup);
+    els.authError.textContent = '';
+  }
+
+  els.tabLogin.addEventListener('click', () => showAuthTab(false));
+  els.tabSignup.addEventListener('click', () => showAuthTab(true));
+
+  async function afterLogin() {
+    state.currentUser = state.trustoken.currentSession;
+    renderAccount();
+    if (state.currentUser.has_token === null) {
+      await askAboutToken();
+    } else if (state.currentUser.has_token) {
+      startTokenWatch();
+    }
+    loadMyMeetings();
+
+    const inviteRoom = new URLSearchParams(window.location.search).get('room');
+    if (inviteRoom) joinConferenceRoom(inviteRoom);
+  }
+
+  async function submitAuth(action, form) {
+    els.authError.textContent = '';
+    try {
+      await action();
+      form.reset();
+      await afterLogin();
+    } catch (err) {
+      els.authError.textContent = err.message || 'That did not work. Please try again.';
+    }
+  }
+
+  els.loginForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitAuth(() => state.trustoken.login(els.loginUsername.value, els.loginPassword.value), els.loginForm);
+  });
+
+  els.signupForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitAuth(() => state.trustoken.register({
+      name: els.signupName.value,
+      username: els.signupUsername.value,
+      password: els.signupPassword.value,
+      signupCode: els.signupCode.value
+    }), els.signupForm);
+  });
+
+  els.btnLogout.addEventListener('click', async () => {
+    try {
+      await state.trustoken.logout();
+    } finally {
+      window.location.href = '/';
     }
   });
 
-  // 6. Rooms Loading and Joining
-  async function loadRooms() {
+  // 6. My Meetings, New Meetings and Links
+  async function loadMyMeetings() {
     try {
-      const res = await fetch('/api/rooms');
-      const data = await res.json();
-      if (!data.success) return;
-
+      const meetings = await state.trustoken.myMeetings();
       els.roomListContainer.innerHTML = '';
-      data.rooms.forEach((room) => {
+      if (meetings.length === 0) {
+        els.roomListContainer.textContent = 'Meetings you create will appear here.';
+      }
+      meetings.forEach((meeting) => {
         const item = document.createElement('div');
         item.className = 'room-card';
         item.innerHTML = `
           <div class="room-info">
-            <div class="room-title">${room.name}</div>
-            <div class="room-host">Host: ${room.hostName}</div>
+            <div class="room-title">${escapeHtml(meeting.name)}</div>
+            <div class="room-host">${escapeHtml(String(meeting.memberCount))} in the meeting</div>
           </div>
-          <div style="display:flex; align-items:center; gap:0.75rem;">
-            <span class="room-security-badge">
-              <span>🔒</span> TrusToken Required
-            </span>
-            <button class="btn-primary" style="padding:0.45rem 1rem; font-size:0.85rem;" data-room-id="${room.id}">
-              Join Room
-            </button>
-          </div>
+          <button class="btn-primary" style="padding:0.45rem 1rem; font-size:0.85rem;">Start</button>
         `;
-
-        item.querySelector('button').addEventListener('click', () => {
-          joinConferenceRoom(room.id);
-        });
-
+        item.querySelector('button').addEventListener('click', () => joinConferenceRoom(meeting.id));
         els.roomListContainer.appendChild(item);
       });
     } catch (e) {
-      console.error('Failed to load rooms:', e);
+      console.error('Failed to load meetings:', e);
     }
   }
 
-  // Create New Meeting Room
-  els.btnCreateRoom.addEventListener('click', async () => {
-    if (!state.currentUser) {
-      showToast('Please authenticate with TrusToken before creating a room', 'warning');
-      return;
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => showToast('Meeting link copied', 'success'))
+        .catch(() => prompt('Copy meeting link:', text));
+    } else {
+      prompt('Copy meeting link:', text);
     }
-    const name = els.inputNewRoomName.value.trim() || 'Lab Research Meeting';
+  }
+
+  let newMeetingId = null;
+
+  els.btnCreateRoom.addEventListener('click', async () => {
     try {
-      const res = await fetch('/api/rooms/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          hostName: state.currentUser.name,
-          requiresToken: true
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast(`Created meeting room: ${data.room.name}`, 'success');
-        joinConferenceRoom(data.room.id);
-      }
+      const meeting = await state.trustoken.createMeeting(els.inputNewRoomName.value.trim());
+      newMeetingId = meeting.id;
+      els.newMeetingLink.value = `${window.location.origin}${meeting.link}`;
+      els.newMeetingPanel.style.display = 'flex';
+      els.inputNewRoomName.value = '';
+      showToast(`Created: ${meeting.name}`, 'success');
+      loadMyMeetings();
     } catch (err) {
-      showToast('Failed to create room', 'error');
+      showToast(err.message || 'Failed to create the meeting', 'error');
     }
   });
 
-  // 7. Join Conference Room
-  function joinConferenceRoom(roomId) {
-    if (!state.currentUser) {
-      showToast('Authentication with C-DAC TrusToken is required to enter', 'error');
-      return;
+  els.btnCopyNewLink.addEventListener('click', () => copyToClipboard(els.newMeetingLink.value));
+  els.btnStartNewMeeting.addEventListener('click', () => {
+    if (newMeetingId) joinConferenceRoom(newMeetingId);
+  });
+
+  function meetingIdFromInput(value) {
+    const text = value.trim();
+    try {
+      return new URL(text).searchParams.get('room') || text;
+    } catch (err) {
+      return text;
+    }
+  }
+
+  els.btnJoinRoom.addEventListener('click', () => {
+    const roomId = meetingIdFromInput(els.inputJoinRoom.value);
+    if (roomId) joinConferenceRoom(roomId);
+  });
+
+  // 7. Join a Meeting
+  let joinInProgress = false;
+
+  async function joinConferenceRoom(roomId) {
+    if (!state.currentUser || state.currentRoomId || joinInProgress) return;
+
+    joinInProgress = true;
+    let tokenPlugged = false;
+    try {
+      await mediaReady;
+      tokenPlugged = state.currentUser.has_token ? await tokenPluggedOrChooseUnverified() : false;
+    } finally {
+      joinInProgress = false;
     }
 
     state.currentRoomId = roomId;
-
-    // Transition View to Conference Stage
-    els.lobbyView.style.display = 'none';
-    els.conferenceView.style.display = 'flex';
-
-    // Set local video in conference room
-    els.localVideo.srcObject = state.webrtc.localStream;
-    els.localNameTag.textContent = `${state.currentUser.name} (You)`;
-    els.localTokenBadge.textContent = state.currentUser.token_serial;
-
-    // Join room via Socket.IO
+    state.joinedWithToken = tokenPlugged;
     state.socket.emit('join-room', {
       roomId,
-      user: state.currentUser,
-      sessionToken: state.currentUser.sessionToken
+      sessionToken: state.currentUser.sessionToken,
+      tokenPresent: tokenPlugged
     });
-
-    // Start continuous Voice Relay backup for guaranteed carrier/NAT penetration
-    if (!state.audioMuted) {
-      state.webrtc.startVoiceRelay();
-    }
-
-    startConferenceTimer();
-    updateGridPeersCount();
-    showToast(`Joined meeting room: ${roomId}`, 'success');
   }
+
+  els.btnWaitingLeave.addEventListener('click', () => {
+    window.location.href = '/';
+  });
 
   // Conference Duration Timer
   let timerInterval = null;
@@ -442,25 +641,131 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Socket.IO Room Events
-  state.socket.on('room-joined-success', ({ roomId, roomName, isHost, existingPeers, minutes, signatures }) => {
-    els.confRoomTitle.textContent = roomName;
+  state.socket.on('waiting-for-host', ({ roomName, removedEarlier }) => {
+    stopReconnecting();
+    els.waitingMessage.textContent = removedEarlier
+      ? `The host removed you from "${roomName}" earlier. You will enter if the host lets you back in.`
+      : `You are joining "${roomName}" as an unverified user. You will enter when the host accepts your request.`;
+    els.waitingModal.classList.add('open');
+  });
+
+  state.socket.on('admission-declined', ({ message }) => {
+    els.waitingModal.classList.remove('open');
+    endMeeting('Request Not Accepted', message);
+    els.btnTokenGateRejoin.textContent = 'Ask Again';
+  });
+
+  state.socket.on('room-joined-success', ({ roomId, roomName, isHost, isLocked, assurance, existingPeers, minutes, signatures, waiting }) => {
+    const wasReconnecting = state.reconnecting;
+    stopReconnecting();
+    state.pendingAdmissions.clear();
+    state.inMeeting = true;
     state.isHost = isHost;
+    state.isLocked = isLocked;
+    state.myAssurance = assurance;
+    els.waitingModal.classList.remove('open');
+
+    els.lobbyView.style.display = 'none';
+    els.conferenceView.style.display = 'flex';
+    els.localVideo.srcObject = state.webrtc.localStream;
+    els.confRoomTitle.textContent = roomName;
+    els.confRoomIdTag.textContent = roomId;
+    els.confAssuranceTag.textContent = `You: ${assuranceLabel(assurance)}`;
+    els.localNameTag.textContent = `${state.currentUser.name} (You)`;
+    els.localTokenBadge.textContent = assuranceLabel(assurance);
+    els.localTokenBadge.className = `assurance-badge ${assuranceStyle(assurance)}`;
+    els.hostControls.style.display = isHost ? 'flex' : 'none';
+    renderLockButton();
+    renderDiagnosticHub();
 
     if (minutes) els.minutesEditor.value = minutes;
     if (signatures) renderSignatures(signatures);
 
-    // Initiate WebRTC peer connections with existing members
-    existingPeers.forEach((p) => {
-      const peerId = p.peerId || p;
-      const peerUser = p.user || { name: 'Lab Member' };
-      state.webrtc.createPeerConnection(peerId, true, peerUser);
+    (waiting || []).forEach(({ peerId, user, removedEarlier }) => {
+      state.pendingAdmissions.set(peerId, { user, removedEarlier });
+    });
+    renderAdmissions();
+
+    existingPeers.forEach(({ peerId, user }) => {
+      state.roster.set(peerId, user);
+      state.webrtc.createPeerConnection(peerId, true, user);
     });
 
+    // Voice starts only now, so nothing is sent from the waiting room.
+    if (!state.audioMuted) state.webrtc.startVoiceRelay();
+    if (!timerInterval) startConferenceTimer();
+    updateGridPeersCount();
     updateParticipantsRoster();
+    announceMicState();
+    showToast(wasReconnecting ? 'Reconnected' : `Joined: ${roomName}`, 'success');
+  });
+
+  state.socket.on('room-error', ({ message }) => {
+    if (state.inMeeting || state.reconnecting) {
+      endMeeting('Could Not Stay in the Meeting', message);
+      return;
+    }
+    els.waitingModal.classList.remove('open');
+    state.currentRoomId = null;
+    showToast(message, 'error');
+  });
+
+  state.socket.on('token-removed', ({ message }) => {
+    endMeeting('Removed From Meeting', `${message} Plug it back in and rejoin, or ask the host to accept you as unverified.`);
+  });
+
+  state.socket.on('removed-by-host', ({ message }) => {
+    endMeeting('Removed by the Host', message);
+    els.btnTokenGateRejoin.textContent = 'Ask to Rejoin';
+  });
+
+  state.socket.on('meeting-ended', ({ message }) => {
+    endMeeting('Meeting Ended', message, { canRejoin: false });
+  });
+
+  // A brief network drop should not end the meeting. Media stops while the server
+  // can't enforce the rules, and the person returns on their own once it is back.
+  const RECONNECT_GIVE_UP_MS = 30000;
+  let reconnectTimer = null;
+
+  function stopReconnecting() {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    state.reconnecting = false;
+  }
+
+  state.socket.on('disconnect', () => {
+    if (!state.currentRoomId || state.meetingEnded || state.reconnecting) return;
+    state.reconnecting = true;
+    state.inMeeting = false;
+    state.webrtc.stopVoiceRelay();
+    [...state.roster.keys()].forEach((peerId) => {
+      state.webrtc.removePeer(peerId);
+      onRemoteStreamRemoved(peerId);
+    });
+    state.roster.clear();
+    state.pendingAdmissions.clear();
+    renderAdmissions();
+    els.confAssuranceTag.textContent = 'Reconnecting...';
+    showToast('Connection lost. Reconnecting...', 'warning');
+    reconnectTimer = setTimeout(() => {
+      endMeeting('Connection Lost', 'The connection to the meeting server was lost and could not be restored.');
+    }, RECONNECT_GIVE_UP_MS);
+  });
+
+  state.socket.on('connect', () => {
+    if (!state.reconnecting) return;
+    state.socket.emit('join-room', {
+      roomId: state.currentRoomId,
+      sessionToken: state.currentUser.sessionToken,
+      tokenPresent: state.joinedWithToken
+    });
   });
 
   state.socket.on('user-joined', ({ peerId, user }) => {
-    showToast(`${user.name} joined with TrusToken ${user.token_serial}`, 'info');
+    showToast(`${user.name} joined`, 'info');
+    state.roster.set(peerId, user);
+    announceMicState(); // So the newcomer can show the right icon.
     state.webrtc.createPeerConnection(peerId, false, user);
     updateParticipantsRoster();
   });
@@ -469,11 +774,89 @@ document.addEventListener('DOMContentLoaded', async () => {
     state.webrtc.handleSignal(fromPeerId, signalData, fromUser);
   });
 
-  state.socket.on('user-left', ({ peerId, userName }) => {
-    showToast(`${userName} left the meeting`, 'info');
+  state.socket.on('user-left', ({ peerId, userName, reason }) => {
+    const reasons = {
+      'token-removed': `${userName} was removed: TrusToken disconnected`,
+      'removed-by-host': `${userName} was removed by the host`
+    };
+    showToast(reasons[reason] || `${userName} left the meeting`, reasons[reason] ? 'warning' : 'info');
+    state.roster.delete(peerId);
     state.webrtc.removePeer(peerId);
     onRemoteStreamRemoved(peerId);
     updateParticipantsRoster();
+  });
+
+  // Host tools
+  function renderAdmissions() {
+    els.admissionList.innerHTML = '';
+    state.pendingAdmissions.forEach(({ user, removedEarlier }, peerId) => {
+      const row = document.createElement('div');
+      row.className = 'admission-row';
+
+      const who = document.createElement('div');
+      who.className = 'admission-who';
+      who.textContent = `${user.name} (@${user.user_id})`;
+      const detail = document.createElement('div');
+      detail.className = 'admission-detail';
+      detail.textContent = removedEarlier ? 'Removed earlier, asking to return' : assuranceLabel(user.assurance);
+      who.appendChild(detail);
+
+      const accept = document.createElement('button');
+      accept.className = 'btn-primary admission-btn';
+      accept.textContent = 'Accept';
+      accept.addEventListener('click', () => {
+        state.socket.emit('admission-decision', { peerId, accept: true });
+      });
+
+      const decline = document.createElement('button');
+      decline.className = 'btn-secondary admission-btn';
+      decline.textContent = 'Decline';
+      decline.addEventListener('click', () => {
+        state.socket.emit('admission-decision', { peerId, accept: false });
+      });
+
+      row.append(who, accept, decline);
+      els.admissionList.appendChild(row);
+    });
+    els.admissionPanel.style.display = state.isHost && state.inMeeting && state.pendingAdmissions.size ? 'flex' : 'none';
+  }
+
+  state.socket.on('admission-request', ({ peerId, user, removedEarlier }) => {
+    state.pendingAdmissions.set(peerId, { user, removedEarlier });
+    renderAdmissions();
+    showToast(`${user.name} is asking to join`, 'warning');
+  });
+
+  state.socket.on('admission-resolved', ({ peerId }) => {
+    state.pendingAdmissions.delete(peerId);
+    renderAdmissions();
+  });
+
+  state.socket.on('host-action-denied', ({ message }) => showToast(message, 'error'));
+
+  function renderLockButton() {
+    els.btnLockRoom.textContent = state.isLocked ? 'Unlock Meeting' : 'Lock Meeting';
+  }
+
+  state.socket.on('room-lock-changed', ({ isLocked }) => {
+    state.isLocked = isLocked;
+    renderLockButton();
+    showToast(isLocked ? 'The host locked this meeting' : 'The host unlocked this meeting', 'info');
+  });
+
+  els.btnLockRoom.addEventListener('click', () => {
+    state.socket.emit('host-action', { action: 'lock-room' });
+  });
+
+  els.btnEndMeeting.addEventListener('click', () => {
+    if (confirm('End this meeting for everyone? The link will stop working.')) {
+      state.socket.emit('host-action', { action: 'end-meeting' });
+    }
+  });
+
+  state.socket.on('force-mute', () => {
+    setMicMuted(true);
+    showToast('The host muted your microphone', 'warning');
   });
 
   // 8. Remote Streams & Video Grid
@@ -508,7 +891,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const tapToUnmuteBtn = document.createElement('button');
     tapToUnmuteBtn.className = 'tap-unmute-btn';
     tapToUnmuteBtn.id = `unmute-btn-${peerId}`;
-    tapToUnmuteBtn.innerHTML = `<span>🔊</span> Tap to Hear ${user ? user.name : 'Peer'}`;
+    tapToUnmuteBtn.textContent = `🔊 Tap to Hear ${user ? user.name : 'Peer'}`;
     tapToUnmuteBtn.style.display = 'none';
 
     tapToUnmuteBtn.addEventListener('click', (e) => {
@@ -538,11 +921,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     infoBar.className = 'tile-info-bar';
     infoBar.innerHTML = `
       <div class="tile-participant-tag">
-        <span class="tile-participant-name">${user ? user.name : 'Lab Peer'}</span>
-        <span class="tile-token-badge">${user ? user.token_serial : 'TT-IN-VERIFIED'}</span>
+        <span class="tile-participant-name">${escapeHtml(user ? user.name : 'Participant')}</span>
+        ${assuranceBadge(user ? user.assurance : 'unverified')}
       </div>
       <div class="tile-status-icons">
-        <div class="tile-status-icon" id="mic-icon-${peerId}">🎤</div>
+        <div class="tile-status-icon" id="mic-icon-${peerId}">${micIcon(state.mutedPeers.has(peerId))}</div>
       </div>
     `;
 
@@ -599,67 +982,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 9. TrusToken Heartbeat Alert Listener
-  state.trustoken.onHeartbeatStatusChange = (isAlive, message) => {
-    if (!isAlive) {
-      // Token unplugged or heartbeat failure!
-      els.localTile.classList.add('token-lost');
-      state.webrtc.setAudioEnabled(false);
-      state.webrtc.setVideoEnabled(false);
-
-      if (!document.getElementById('local-token-lost-banner')) {
-        const banner = document.createElement('div');
-        banner.className = 'token-lost-banner';
-        banner.id = 'local-token-lost-banner';
-        banner.innerHTML = `
-          <div class="alert-icon">⚠️</div>
-          <div style="font-weight:700; color:var(--rose-400); font-size:1.1rem;">TrusToken USB Dongle Detached</div>
-          <p style="font-size:0.85rem; color:var(--text-secondary); max-width:320px;">
-            Audio and video feeds paused to prevent unauthorized meeting access. Reconnect hardware dongle to restore session.
-          </p>
-        `;
-        els.localTile.appendChild(banner);
-      }
-
-      state.socket.emit('token-heartbeat-lost');
-      showToast('🚨 TrusToken disconnected! Access suspended for security.', 'error');
-    } else {
-      // Restored
-      els.localTile.classList.remove('token-lost');
-      const b = document.getElementById('local-token-lost-banner');
-      if (b) b.remove();
-      state.webrtc.setAudioEnabled(!state.audioMuted);
-      state.webrtc.setVideoEnabled(!state.videoMuted);
-    }
-  };
-
-  state.socket.on('peer-token-disconnected', ({ peerId, userName }) => {
-    const p = state.peerStreams.get(peerId);
-    if (p?.tileElement) {
-      p.tileElement.classList.add('token-lost');
-      showToast(`⚠️ ${userName}'s TrusToken dongle was removed. Stream suspended.`, 'warning');
-    }
-  });
-
   // 10. Bottom Dock Action Controls
-  els.btnToggleMic.addEventListener('click', () => {
-    state.audioMuted = !state.audioMuted;
-    state.webrtc.setAudioEnabled(!state.audioMuted);
-    if (state.audioMuted) {
+  // The lobby and meeting buttons share one setting, so both are always updated.
+  function setMicMuted(muted) {
+    state.audioMuted = muted;
+    state.webrtc.setAudioEnabled(!muted);
+    if (muted) {
       state.webrtc.stopVoiceRelay();
-    } else {
+    } else if (state.inMeeting) {
       state.webrtc.startVoiceRelay();
     }
-    els.btnToggleMic.classList.toggle('danger', state.audioMuted);
-    els.btnToggleMic.querySelector('span').textContent = state.audioMuted ? 'Unmute' : 'Mute';
+    els.togglePreviewMicBtn.classList.toggle('muted', muted);
+    els.btnToggleMic.classList.toggle('danger', muted);
+    els.btnToggleMic.querySelector('span').textContent = muted ? 'Unmute' : 'Mute';
+    document.getElementById('local-mic-indicator').textContent = micIcon(muted);
+  }
+
+  function micIcon(muted) {
+    return muted ? '🔇' : '🎤';
+  }
+
+  function announceMicState() {
+    state.socket.emit('toggle-media-state', { type: 'audio', enabled: !state.audioMuted });
+  }
+
+  state.socket.on('peer-media-state-changed', ({ peerId, type, enabled }) => {
+    if (type !== 'audio') return;
+    if (enabled) state.mutedPeers.delete(peerId);
+    else state.mutedPeers.add(peerId);
+    const icon = document.getElementById(`mic-icon-${peerId}`);
+    if (icon) icon.textContent = micIcon(!enabled);
+    updateParticipantsRoster();
   });
 
-  els.btnToggleCam.addEventListener('click', () => {
-    state.videoMuted = !state.videoMuted;
-    state.webrtc.setVideoEnabled(!state.videoMuted);
-    els.btnToggleCam.classList.toggle('danger', state.videoMuted);
-    els.btnToggleCam.querySelector('span').textContent = state.videoMuted ? 'Start Video' : 'Stop Video';
+  state.socket.on('unmute-request', async () => {
+    if (!state.audioMuted || choiceResolve) return;
+    const answer = await askChoice({
+      title: 'The Host Asks You to Unmute',
+      message: 'Your microphone stays off unless you choose to turn it on.',
+      primary: 'Unmute',
+      secondary: 'Stay Muted'
+    });
+    if (answer === 'primary') setMicMuted(false);
   });
+
+  els.btnToggleMic.addEventListener('click', () => setMicMuted(!state.audioMuted));
+
+  els.btnToggleCam.addEventListener('click', toggleCamera);
 
   els.btnShareScreen.addEventListener('click', async () => {
     const isSharing = await state.webrtc.toggleScreenShare(els.localVideo);
@@ -738,17 +1107,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     try {
-      const pin = await promptPinModal(state.currentUser.name);
-      showToast('Applying IS-16695 PKCS#7 Digital Signature on minutes...', 'info');
+      const password = await promptPassword(state.currentUser.name);
+      showToast('Signing minutes with your software key...', 'info');
 
-      const receipt = await state.trustoken.signMeetingMinutes(
-        state.currentRoomId,
-        state.currentUser.user_id,
-        pin,
-        text
-      );
+      const receipt = await state.trustoken.signMeetingMinutes(state.currentRoomId, password, text);
 
-      showToast(`Minutes digitally signed by ${receipt.signed_by}!`, 'success');
+      showToast(`Minutes signed by ${receipt.signed_by}`, 'success');
     } catch (err) {
       showToast(err.message || 'Signing failed', 'error');
     }
@@ -756,33 +1120,34 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   state.socket.on('minutes-signed-broadcast', ({ signatureReceipt }) => {
     renderSignatures([signatureReceipt]);
-    showToast(`📜 ${signatureReceipt.signed_by} (${signatureReceipt.signer_role}) digitally signed the minutes with TrusToken!`, 'success');
+    showToast(`📜 ${signatureReceipt.signed_by} signed the minutes`, 'success');
   });
 
   function renderSignatures(signatures) {
     signatures.forEach(sig => {
-      if (document.getElementById(`sig-${sig.document_sha256}`)) return;
+      const cardId = `sig-${sig.signature_b64}`;
+      if (document.getElementById(cardId)) return;
       const card = document.createElement('div');
       card.className = 'signature-seal-card';
-      card.id = `sig-${sig.document_sha256}`;
+      card.id = cardId;
       card.innerHTML = `
         <div class="signature-seal-header">
           <span>🛡️</span>
-          <span>Digitally Signed with C-DAC TrusToken</span>
+          <span>Signed with a Software Key (Not the USB Token)</span>
         </div>
         <div style="font-size:0.82rem; font-weight:600; color:var(--text-primary); margin-top:0.4rem;">
-          ${sig.signed_by} &bull; <span style="color:var(--teal-400);">${sig.signer_role}</span>
+          ${escapeHtml(sig.signed_by)} ${assuranceBadge(sig.assurance)}
         </div>
         <div class="signature-hash-row">
           <span>SHA-256 Digest:</span>
-          <span class="signature-hash-val">${sig.document_sha256}</span>
+          <span class="signature-hash-val">${escapeHtml(sig.document_sha256)}</span>
         </div>
         <div class="signature-hash-row">
-          <span>Hardware Token Serial:</span>
-          <span class="signature-hash-val">${sig.token_serial} (${sig.algorithm})</span>
+          <span>Algorithm:</span>
+          <span class="signature-hash-val">${escapeHtml(sig.algorithm)}</span>
         </div>
         <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.5rem;">
-          Timestamp: ${new Date(sig.timestamp).toLocaleString()} &bull; IS-16695 Verified
+          Timestamp: ${escapeHtml(new Date(sig.timestamp).toLocaleString())}
         </div>
       `;
       els.signaturesList.prepend(card);
@@ -807,8 +1172,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     bubble.className = `chat-bubble ${msg.senderId === state.socket.id ? 'mine' : ''}`;
     bubble.innerHTML = `
       <div class="chat-sender-info">
-        <span>${msg.senderName} (${msg.tokenSerial})</span>
-        <span>${msg.timestamp}</span>
+        <span>${escapeHtml(msg.senderName)} ${assuranceBadge(msg.assurance)}</span>
+        <span>${escapeHtml(msg.timestamp)}</span>
       </div>
       <div class="chat-text">${escapeHtml(msg.text)}</div>
     `;
@@ -817,46 +1182,64 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   function escapeHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   // 13. Participant Roster
   function updateParticipantsRoster() {
     els.participantsList.innerHTML = '';
 
-    // Self
     if (state.currentUser) {
       const selfItem = document.createElement('div');
       selfItem.className = 'room-card';
       selfItem.innerHTML = `
         <div>
-          <div style="font-weight:600; color:var(--text-primary);">${state.currentUser.name} (You)</div>
-          <div style="font-size:0.75rem; color:var(--teal-400);">${state.currentUser.role} &bull; ${state.currentUser.token_serial}</div>
+          <div style="font-weight:600; color:var(--text-primary);">${escapeHtml(state.currentUser.name)} (You)</div>
+          <div style="font-size:0.75rem; color:var(--teal-400);">@${escapeHtml(state.currentUser.user_id)}</div>
         </div>
-        <span class="room-security-badge">Verified</span>
+        ${assuranceBadge(state.myAssurance)}
       `;
       els.participantsList.appendChild(selfItem);
     }
 
-    // Peers
-    state.peerStreams.forEach((peer, peerId) => {
+    state.roster.forEach((user, peerId) => {
       const item = document.createElement('div');
-      item.className = 'room-card';
+      item.className = 'room-card participant-row';
       item.innerHTML = `
         <div>
-          <div style="font-weight:600; color:var(--text-primary);">${peer.user ? peer.user.name : 'Lab Peer'}</div>
-          <div style="font-size:0.75rem; color:var(--teal-400);">${peer.user ? peer.user.role : 'Researcher'} &bull; ${peer.user ? peer.user.token_serial : 'TT-IN'}</div>
+          <div style="font-weight:600; color:var(--text-primary);">${escapeHtml(user.name)}</div>
+          <div style="font-size:0.75rem; color:var(--teal-400);">@${escapeHtml(user.user_id)}</div>
         </div>
-        <span class="room-security-badge">Verified</span>
+        ${assuranceBadge(user.assurance)}
       `;
+
+      if (state.isHost && user.user_id !== state.currentUser.user_id) {
+        const addAction = (label, action) => {
+          const button = document.createElement('button');
+          button.className = 'btn-secondary admission-btn';
+          button.textContent = label;
+          button.addEventListener('click', () => {
+            state.socket.emit('host-action', { action, targetPeerId: peerId });
+          });
+          item.appendChild(button);
+        };
+        if (state.mutedPeers.has(peerId)) addAction('Ask to Unmute', 'ask-unmute');
+        else addAction('Mute', 'mute-peer');
+        addAction('Remove', 'kick-peer');
+      }
       els.participantsList.appendChild(item);
     });
   }
 
   // 14. Leave Conference
   els.btnLeaveCall.addEventListener('click', () => {
-    if (confirm('Leave the lab video conference?')) {
-      location.reload();
+    if (confirm('Leave this meeting?')) {
+      window.location.href = '/';
     }
   });
 
@@ -875,12 +1258,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Initial load
-  await loadTokenInfo();
-
-  // Handle ?room= in URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const paramRoom = urlParams.get('room');
-  if (paramRoom) {
-    showToast(`Invited to room: ${paramRoom}. Please enter your TrusToken PIN to join.`, 'info');
+  renderAccount();
+  if (await state.trustoken.restoreSession()) {
+    await afterLogin();
+  } else if (new URLSearchParams(window.location.search).get('room')) {
+    showToast('You were invited to a meeting. Log in or sign up to join.', 'info');
   }
 });

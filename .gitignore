@@ -3,3 +3,8 @@ __pycache__/
 .env
 .venv/
 node_modules/
+data/
+*.key
+tunnel.log
+tunnel.pid
+current-tunnel-url.txt

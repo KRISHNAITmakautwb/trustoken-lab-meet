@@ -1356,3 +1356,66 @@ body::after {
     width: 100%;
   }
 }
+
+
+/* Profiles, meeting links, waiting room */
+.stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.input-row { display: flex; gap: 0.6rem; align-items: stretch; }
+.input-row .auth-input { flex: 1; min-width: 0; }
+.auth-tabs { display: flex; gap: 0.5rem; }
+.auth-tab {
+  flex: 1;
+  padding: 0.6rem;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-tab.active { border-color: var(--cyan-400); color: var(--text-primary); }
+.auth-input {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  box-sizing: border-box;
+}
+.form-error { min-height: 1.1rem; font-size: 0.82rem; font-weight: 600; color: var(--rose-400); text-align: center; }
+.section-label { font-weight: 700; font-size: 0.95rem; color: var(--text-primary); }
+.token-summary-row { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; }
+.token-summary { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.45; }
+.compact-btn { padding: 0.45rem 0.85rem; font-size: 0.8rem; white-space: nowrap; }
+.new-meeting-panel { padding: 0.85rem; border: 1px solid var(--border-subtle); border-radius: 14px; }
+.assurance-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.assurance-badge.is-detected { color: var(--emerald-400); border: 1px solid var(--emerald-400); }
+.assurance-badge.is-unverified { color: var(--rose-400); border: 1px solid var(--rose-400); }
+.participant-row { flex-wrap: wrap; gap: 0.5rem; }
+.admission-panel {
+  position: fixed;
+  top: 84px;
+  left: 16px;
+  z-index: 900;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(360px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.97);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+}
+.admission-row { display: flex; gap: 0.5rem; align-items: center; }
+.admission-who { flex: 1; min-width: 0; font-size: 0.85rem; font-weight: 600; color: var(--text-primary); overflow-wrap: anywhere; }
+.admission-detail { font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
+.admission-btn { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
