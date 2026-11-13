@@ -8,3 +8,8 @@ data/
 tunnel.log
 tunnel.pid
 current-tunnel-url.txt
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz

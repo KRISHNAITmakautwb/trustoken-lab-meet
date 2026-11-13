@@ -3,7 +3,7 @@
 TrusToken local presence helper.
 
 Run this on each participant's own computer. A browser cannot see USB devices,
-so the meeting page asks this helper whether a C-DAC TrusToken is plugged in.
+so the meeting page asks this helper whether a TrusToken is plugged in.
 
 It only reports whether a device with the TrusToken USB ID is on the USB bus.
 That proves presence of a matching device, not identity: it does not talk to

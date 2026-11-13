@@ -1,0 +1,408 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+
+% Colors
+\definecolor{cdacblue}{RGB}{14, 53, 101}
+\definecolor{labcyan}{RGB}{0, 150, 190}
+\definecolor{darkgray}{RGB}{45, 52, 54}
+\definecolor{lightgray}{RGB}{245, 247, 250}
+\definecolor{alertred}{RGB}{214, 48, 49}
+\definecolor{succgreen}{RGB}{46, 204, 113}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=cdacblue,
+    filecolor=cdacblue,      
+    urlcolor=labcyan,
+    citecolor=cdacblue,
+    pdftitle={TrusMeet: PI and Administrator Operations Manual},
+    pdfauthor={Krishna Saha, Dr. Dhiman Saha - de.ci.phe.red LAB, IIT Bhilai}
+}
+
+\lstdefinelanguage{json}{
+    basicstyle=\footnotesize\ttfamily,
+    breaklines=true,
+    showstringspaces=false,
+    frame=lines,
+    backgroundcolor=\color{lightgray}
+}
+\lstset{
+    backgroundcolor=\color{lightgray},
+    basicstyle=\footnotesize\ttfamily,
+    breaklines=true,
+    captionpos=b,
+    frame=lines,
+    rulecolor=\color{cdacblue},
+    keywordstyle=\color{cdacblue}\bfseries,
+    stringstyle=\color{darkgray},
+    commentstyle=\color{gray}\itshape,
+    showstringspaces=false
+}
+
+% Page style
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{cdacblue}{\textbf{TrusMeet}} --- PI \& Administrator Manual}
+\fancyhead[R]{\small\textcolor{darkgray}{de.ci.phe.red LAB | IIT Bhilai}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.5pt}
+
+% Title formats
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{cdacblue}}
+  {\chaptertitlename\ \thechapter}{10pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{cdacblue}}
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{darkgray}}
+  {\thesubsection}{1em}{}
+
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{alertbox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=alertred,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=alertred,
+  title=#2,
+  #1
+}
+
+\newtcolorbox{infobox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=cdacblue,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=cdacblue,
+  title=#2,
+  #1
+}
+
+\newtcolorbox{tipbox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=succgreen,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=succgreen,
+  title=#2,
+  #1
+}
+
+\begin{document}
+
+% Title Page
+\begin{titlepage}
+    \centering
+    \vspace*{1.5cm}
+    
+    {\Huge\bfseries\color{cdacblue} TrusMeet: Zero-Trust Lab Video Conference Platform\par}
+    \vspace{0.8cm}
+    {\LARGE\bfseries\color{darkgray} System Administrator \& Principal Investigator (PI) Manual\par}
+    \vspace{0.4cm}
+    {\large Complete Operations, Hardware PKCS\#11 Integration, and Cryptographic PDF Signing Guide\par}
+    
+    \vspace{2.5cm}
+    \begin{tcolorbox}[colback=lightgray,colframe=cdacblue,width=0.9\textwidth,arc=2mm]
+    \centering
+    \textbf{Project:} Indigenous Cryptographic Hardware Token Integration in Academic Video Conferencing\\
+    \textbf{Hardware Standard:} BIS IS-16695 (Parts 1 \& 2), ISO-7816, PKCS\#11 v2.20\\
+    \textbf{Document Signing:} ISO 32000-1 / RFC 5652 CMS Detached Signatures (PAdES)
+    \end{tcolorbox}
+    
+    \vspace{2.5cm}
+    \begin{tabular}{ll}
+    \textbf{Prepared By:} & Krishna Saha (AI Security) \\
+    \textbf{Laboratory:} & de.ci.phe.red LAB (Cryptography \& Information Security) \\
+    \textbf{Affiliation:} & Department of CSE, Indian Institute of Technology Bhilai \\
+    \textbf{Principal Investigator:} & Dr. Dhiman Saha \\
+    \textbf{Hardware Partner:} & C-DAC Noida \& IIT Bhilai \\
+    \textbf{Version:} & 1.0 (Lab Edition) \quad | \quad \textbf{Date:} November 2026
+    \end{tabular}
+    
+    \vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% CHAPTER 1
+\chapter{System Overview \& Architecture}
+
+\section{Introduction}
+\textbf{TrusMeet} is an indigenous zero-trust video conferencing platform specifically engineered for research laboratory management, doctoral defense sessions, and confidential academic meetings. Unlike conventional commercial solutions (e.g., Zoom, Google Meet), TrusMeet enforces hardware-rooted identity validation via the **C-DAC TrusToken** cryptographic USB hardware device.
+
+\section{Core Architectural Principles}
+\begin{enumerate}[label=\textbf{\arabic*.}]
+    \item \textbf{Hardware-Bound Identity}: Authentication is anchored in physical silicon. The user's private key never leaves the on-chip secure microcontroller.
+    \item \textbf{Zero-Trust Admission}: Room gates can be configured to require strict hardware token validation. Non-token visitors cannot enter protected lab deliberations.
+    \item \textbf{Continuous Presence Verification (Liveness)}: Authentication is not a one-time event; a periodic hardware heartbeat verifies token presence. Token removal triggers immediate security lockdowns.
+    \item \textbf{Cryptographic Minutes Non-Repudiation}: Meeting resolutions and research agreements are digitally signed inside the PDF container using RFC 5652 CMS/PKCS\#7 structures.
+\end{enumerate}
+
+\section{System Component Stack}
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Subsystem} & \textbf{Role and Implementation Technologies} \\
+\midrule
+\textbf{WebRTC Signaling Server} & Node.js, Express, Socket.IO. Handles real-time mesh signaling, active room state, and audio/video transport coordination. \\
+\textbf{PKCS\#11 Python Bridge} & \texttt{trustoken\_bridge.py} executing against \texttt{libtrustokenP11Libv3.3.0.so} and \texttt{libpcsclite.so.1}. Manages smartcard slots, PIN checks, and challenge signing. \\
+\textbf{Cryptographic PDF Signer} & Standalone ISO 32000-1 / RFC 5652 engine (\texttt{pdf\_signer/}). Injects detached CMS signatures with cryptographic timestamps into meeting minutes. \\
+\textbf{Edge Tunneling Service} & Cloudflare Edge routing via \texttt{start-public-tunnel.sh}. Provides trusted TLS termination for remote lab scholars without firewall port forwarding. \\
+\bottomrule
+\end{tabularx}
+\caption{TrusMeet Architectural Stack}
+\end{table}
+
+\newpage
+% CHAPTER 2
+\chapter{Hardware Setup \& PKCS\#11 Driver Stack}
+
+\section{Physical C-DAC TrusToken Dongle}
+The C-DAC TrusToken is an indigenous cryptographic USB token developed jointly by C-DAC Noida and IIT Bhilai. It adheres to:
+\begin{itemize}[noitemsep]
+    \item \textbf{BIS IS-16695 (Part 1 \& 2)}: Indian Standard for Cryptographic Tokens.
+    \item \textbf{ISO-7816}: Standard smart card interface specifications.
+    \item \textbf{PKCS\#11 v2.20}: Cryptographic Token Interface standard (Cryptoki).
+\end{itemize}
+
+\subsection{USB Bus Identification}
+When inserted into a Linux workstation, the kernel enumerates the device on the USB bus. You can confirm device presence using:
+\begin{lstlisting}[language=bash]
+lsusb
+\end{lstlisting}
+The expected output includes:
+\begin{lstlisting}[language=bash]
+Bus 001 Device 005: ID 288d:0040 CDAC INDIA TrusToken
+\end{lstlisting}
+
+\section{Understanding the Hardware LED Status}
+The TrusToken hardware dongle is equipped with a status LED indicator:
+\begin{itemize}
+    \item \textbf{Solid Red Light (Normal / Standby)}: Confirms that the device is receiving 5V DC power from the host USB port, the microcontroller has initialized, and the crypto-container is in its default secure standby state awaiting PIN authentication.
+    \item \textbf{Blinking / Flashing Red Light (Active Execution)}: Indicates active APDU command exchange between the operating system and the cryptographic chip (e.g., certificate reading, challenge signing, or PIN verification).
+\end{itemize}
+
+\section{Configuring the PC/SC Smartcard Daemon (\texttt{pcscd})}
+The C-DAC PKCS\#11 library (\texttt{/usr/local/lib/libtrustokenP11Libv3.3.0.so}) relies on \texttt{libpcsclite} to communicate with CCID hardware via the PC/SC daemon.
+
+\begin{alertbox}{Crucial Operational Prerequisite}
+If \texttt{pcscd} is stopped, the PKCS\#11 bridge will fail with \texttt{CKR\_TOKEN\_NOT\_PRESENT (0xe0)} even if the USB token is physically inserted. You must start the daemon on the host.
+\end{alertbox}
+
+To start and enable the daemon on Ubuntu/Debian:
+\begin{lstlisting}[language=bash]
+sudo systemctl start pcscd
+sudo systemctl enable pcscd
+\end{lstlisting}
+
+Verify daemon and reader status using the standard OpenSC utility:
+\begin{lstlisting}[language=bash]
+opensc-tool -l
+\end{lstlisting}
+You should see the active C-DAC TrusToken CCID reader listed.
+
+\section{Validating Bridge Hardware Diagnostics}
+To test token communication through the TrusMeet Python bridge, execute:
+\begin{lstlisting}[language=bash]
+cd /home/krishna-saha/trustoken-lab-meet
+python3 trustoken_bridge.py hardware-status
+\end{lstlisting}
+When healthy, the response JSON will show:
+\begin{lstlisting}[language=json]
+{
+  "library_present": true,
+  "hardware_dongle_present": true,
+  "slots_count": 1,
+  "token_details": {
+    "manufacturer": "CDAC-Noida (www.cdac.in)",
+    "model": "TrusToken-v3",
+    "serial_number": "CDAC-TT-2026-001"
+  }
+}
+\end{lstlisting}
+
+\newpage
+% CHAPTER 3
+\chapter{Server Deployment \& Network Orchestration}
+
+\section{Starting the Application Server}
+Navigate to the project root directory and start the Node.js application:
+\begin{lstlisting}[language=bash]
+cd /home/krishna-saha/trustoken-lab-meet
+node server.js
+\end{lstlisting}
+
+The server binds to all interfaces (\texttt{0.0.0.0}) across two ports:
+\begin{itemize}[noitemsep]
+    \item \textbf{Port 8443 (HTTPS)}: Primary secure WebRTC port utilizing self-signed SSL certificates (\texttt{server.crt} and \texttt{server.key}).
+    \item \textbf{Port 8080 (HTTP)}: Secondary port for local testing.
+\end{itemize}
+
+\section{WebRTC Browser Security: Why HTTPS is Mandatory}
+Modern web browsers (Google Chrome, Mozilla Firefox, Microsoft Edge, Apple Safari) enforce the W3C \textbf{Secure Context} specification:
+\begin{itemize}
+    \item \texttt{http://localhost:8080} is specially grandfathered by browsers as secure.
+    \item Any remote IP address accessed over plain HTTP (e.g., \texttt{http://10.10.1.226:8080}) is treated as \textbf{Insecure}. In this context, \texttt{navigator.mediaDevices.getUserMedia()} is completely disabled, blocking camera, microphone, and screen sharing.
+\end{itemize}
+
+\begin{tipbox}{Rule of Thumb for LAN Access}
+When connecting over LAN IP, always use HTTPS: \texttt{https://<YOUR-IP>:8443}.
+Accept the self-signed certificate warning by clicking \textbf{"Advanced" $\rightarrow$ "Proceed to IP (unsafe)"}.
+\end{tipbox}
+
+\section{Deploying the Cloudflare Public Mobile Tunnel}
+To allow scholars and external collaborators on mobile phones or remote networks to join seamlessly without manual firewall routing or certificate errors, start the public tunnel:
+\begin{lstlisting}[language=bash]
+cd /home/krishna-saha/trustoken-lab-meet
+./start-public-tunnel.sh
+\end{lstlisting}
+This script spawns \texttt{cloudflared} in the background and provisions a globally trusted HTTPS link (e.g., \texttt{https://dispatch-atmosphere-shed-title.trycloudflare.com/?room=LAB-DECIPHERED-SYNC}).
+
+\section{Firewall Rules (UFW)}
+If external clients on the local subnet cannot reach the server, ensure Ubuntu's firewall allows traffic:
+\begin{lstlisting}[language=bash]
+sudo ufw allow 8080/tcp
+sudo ufw allow 8443/tcp
+\end{lstlisting}
+
+\newpage
+% CHAPTER 4
+\chapter{PI Host Privileges \& Zero-Trust Moderation}
+
+\section{Host Role Differentiation}
+The server evaluates user certificates issued under the Lab CA. A user logging in with the Principal Investigator certificate is automatically granted \textbf{Host Authority}.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{Capability} & \textbf{PI (Host)} & \textbf{Lab Member (Scholar)} \\
+\midrule
+Audio/Video Stream Broadcast & \checkmark & \checkmark \\
+Screen Share Presentations & \checkmark & \checkmark \\
+In-Meeting Chat Participation & \checkmark & \checkmark \\
+Room Locking / Unlocking & \checkmark & $\times$ \\
+Forced Mute of Any Participant & \checkmark & $\times$ \\
+Kick / Eject Participant & \checkmark & $\times$ \\
+Official Sign-Off on Meeting Minutes & \checkmark & $\times$ (Review/Co-sign only) \\
+\bottomrule
+\end{tabular}
+\caption{Role Permissions Matrix}
+\end{table}
+
+\section{Room Security Controls}
+\begin{itemize}
+    \item \textbf{Locking a Room}: The PI can toggle the room lock button in the top navigation bar. When locked, incoming connection requests from new scholars are rejected until unlocked.
+    \item \textbf{Participant Moderation}: Clicking on a participant's tile provides options to mute noisy microphones or disconnect unauthorized users.
+\end{itemize}
+
+\section{The Physical Token Presence Heartbeat}
+\begin{infobox}{How the Heartbeat Operates}
+Every 12 seconds, the client sends a nonce challenge to the TrusToken bridge. If the USB dongle is removed from the USB port:
+\begin{enumerate}[noitemsep]
+    \item The PKCS\#11 bridge reports failure to sign the micro-challenge.
+    \item The client immediately silences the user's microphone and pauses video transmission.
+    \item A broadcast message (\texttt{peer-token-disconnected}) alerts all meeting attendees that the physical token has been removed.
+\end{enumerate}
+\end{infobox}
+
+\newpage
+% CHAPTER 5
+\chapter{Cryptographic PDF Signing of Meeting Minutes}
+
+\section{Standard-Compliant Cryptographic Protocol}
+TrusMeet includes a complete PDF cryptographic signing engine located in \texttt{pdf\_signer/}. It strictly conforms to:
+\begin{itemize}[noitemsep]
+    \item \textbf{ISO 32000-1 / ISO 32000-2}: Standard PDF document architecture.
+    \item \textbf{RFC 5652 (CMS / PKCS\#7)}: Cryptographic Message Syntax for detached signatures.
+    \item \textbf{ETSI EN 319 142 (PAdES)}: PDF Advanced Electronic Signatures.
+    \item \textbf{RFC 5280}: X.509 Certificate and CRL specifications.
+\end{itemize}
+
+\section{Signing Workflow via CLI}
+To sign any lab document or generated meeting minutes with the PI's digital signature:
+\begin{lstlisting}[language=bash]
+cd /home/krishna-saha/trustoken-lab-meet/pdf_signer
+python3 demo.py sign --input minutes.pdf --output minutes_signed.pdf --name "Dr. Dhiman Saha"
+\end{lstlisting}
+
+\subsection{The Automated Test and Verification Suite}
+To execute the comprehensive end-to-end cryptographic test (PKI generation, visual stamp injection, detached CMS calculation, deep verification, and intentional tamper detection):
+\begin{lstlisting}[language=bash]
+python3 demo.py full-flow
+\end{lstlisting}
+
+\section{Universal Verification (``Verify Anywhere'')}
+Signed PDFs produced by TrusMeet are verified by any standard compliant utility:
+\begin{enumerate}
+    \item \textbf{Linux CLI (Poppler \texttt{pdfsig})}:
+\begin{lstlisting}[language=bash]
+pdfsig minutes_signed.pdf
+\end{lstlisting}
+Output confirms: \textit{"Signature is Valid"} and identifies the signer certificate.
+    \item \textbf{Adobe Acrobat Reader}:
+    Open the signed PDF in Adobe Reader. The signature banner will report a valid digital signature adhering to PAdES-B.
+\end{enumerate}
+
+\section{Mathematical Tamper Resistance}
+The signature covers the exact document byte range excluding the signature container itself (\texttt{/ByteRange} allocation). Modifying a single character or byte in the document invalidates the SHA-256 digest, immediately alerting any reader to unauthorized alteration.
+
+\newpage
+% CHAPTER 6
+\chapter{Troubleshooting \& Diagnostic Reference}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{p{4cm}Xp{4.5cm}}
+\toprule
+\textbf{Symptom} & \textbf{Probable Root Cause} & \textbf{Resolution Step} \\
+\midrule
+\texttt{CKR\_TOKEN\_NOT\_PRESENT} error in logs. & USB dongle unplugged OR \texttt{pcscd} service is stopped. & Run \texttt{lsusb} to verify hardware, then execute \texttt{sudo systemctl restart pcscd}. \\
+\midrule
+Remote mobile browser cannot turn on camera/mic. & Page accessed via plain HTTP over network IP. & Connect using the HTTPS URL or start \texttt{./start-public-tunnel.sh}. \\
+\midrule
+Public tunnel fails to obtain URL. & \texttt{cloudflared} process already running or dead lockfile. & Run \texttt{pkill cloudflared} and restart \texttt{./start-public-tunnel.sh}. \\
+\midrule
+Browser displays ``Your connection is not private''. & Self-signed certificate on port 8443. & Click ``Advanced'' $\rightarrow$ ``Proceed to localhost (unsafe)''. \\
+\midrule
+PIN authentication rejected. & Incorrect hardware PIN entered. & TrusToken allows limited PIN retries before lockup. Re-verify the PIN before re-submitting. \\
+\bottomrule
+\end{tabularx}
+\caption{Administrator Troubleshooting Matrix}
+\end{table}
+
+\vspace{2cm}
+\begin{center}
+\textbf{--- End of PI \& Administrator Operations Manual ---}\\
+\small \textit{de.ci.phe.red LAB $\cdot$ Department of CSE $\cdot$ Indian Institute of Technology Bhilai}
+\end{center}
+
+\end{document}

@@ -1,0 +1,384 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+
+% Colors
+\definecolor{cdacblue}{RGB}{14, 53, 101}
+\definecolor{labcyan}{RGB}{0, 150, 190}
+\definecolor{darkgray}{RGB}{45, 52, 54}
+\definecolor{lightgray}{RGB}{245, 247, 250}
+\definecolor{alertred}{RGB}{214, 48, 49}
+\definecolor{succgreen}{RGB}{46, 204, 113}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=cdacblue,
+    filecolor=cdacblue,      
+    urlcolor=labcyan,
+    citecolor=cdacblue,
+    pdftitle={TrusMeet: Lab Member and Research Scholar User Manual},
+    pdfauthor={Krishna Saha - de.ci.phe.red LAB, IIT Bhilai}
+}
+
+\lstdefinelanguage{json}{
+    basicstyle=\footnotesize\ttfamily,
+    breaklines=true,
+    showstringspaces=false,
+    frame=lines,
+    backgroundcolor=\color{lightgray}
+}
+\lstset{
+    backgroundcolor=\color{lightgray},
+    basicstyle=\footnotesize\ttfamily,
+    breaklines=true,
+    captionpos=b,
+    frame=lines,
+    rulecolor=\color{cdacblue},
+    keywordstyle=\color{cdacblue}\bfseries,
+    stringstyle=\color{darkgray},
+    commentstyle=\color{gray}\itshape,
+    showstringspaces=false
+}
+
+% Page style
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{cdacblue}{\textbf{TrusMeet}} --- Lab Member \& Scholar User Guide}
+\fancyhead[R]{\small\textcolor{darkgray}{de.ci.phe.red LAB | IIT Bhilai}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.5pt}
+
+% Title formats
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{cdacblue}}
+  {\chaptertitlename\ \thechapter}{10pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{cdacblue}}
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{darkgray}}
+  {\thesubsection}{1em}{}
+
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{alertbox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=alertred,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=alertred,
+  title=#2,
+  #1
+}
+
+\newtcolorbox{infobox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=cdacblue,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=cdacblue,
+  title=#2,
+  #1
+}
+
+\newtcolorbox{tipbox}[2][]{
+  enhanced,
+  breakable,
+  colback=white,
+  colframe=succgreen,
+  arc=3mm,
+  boxrule=1pt,
+  fonttitle=\bfseries\color{white},
+  colbacktitle=succgreen,
+  title=#2,
+  #1
+}
+
+\begin{document}
+
+% Title Page
+\begin{titlepage}
+    \centering
+    \vspace*{1.5cm}
+    
+    {\Huge\bfseries\color{cdacblue} TrusMeet: Zero-Trust Lab Video Conference Platform\par}
+    \vspace{0.8cm}
+    {\LARGE\bfseries\color{darkgray} Lab Member \& Research Scholar User Manual\par}
+    \vspace{0.4cm}
+    {\large Practical Guide to Hardware Token Authentication, Meeting Collaboration, and Secure Participation\par}
+    
+    \vspace{2.5cm}
+    \begin{tcolorbox}[colback=lightgray,colframe=cdacblue,width=0.9\textwidth,arc=2mm]
+    \centering
+    \textbf{Target Audience:} PhD Scholars, Postdocs, Research Assistants, and Project Students\\
+    \textbf{Laboratory:} de.ci.phe.red LAB (Cryptography \& Security)\\
+    \textbf{Hardware Device:} C-DAC TrusToken USB Security Key (IS-16695 / ISO-7816)
+    \end{tcolorbox}
+    
+    \vspace{2.5cm}
+    \begin{tabular}{ll}
+    \textbf{Prepared By:} & Krishna Saha (AI Security) \\
+    \textbf{Laboratory:} & de.ci.phe.red LAB (Cryptography \& Information Security) \\
+    \textbf{Affiliation:} & Department of CSE, Indian Institute of Technology Bhilai \\
+    \textbf{Principal Investigator:} & Dr. Dhiman Saha \\
+    \textbf{Version:} & 1.0 (Lab Edition) \quad | \quad \textbf{Date:} November 2026
+    \end{tabular}
+    
+    \vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% CHAPTER 1
+\chapter{Introduction \& System Requirements}
+
+\section{Welcome to TrusMeet}
+Welcome to \textbf{TrusMeet}, the official high-assurance research video conferencing platform of the \textbf{de.ci.phe.red LAB} at IIT Bhilai. 
+
+Unlike generic meeting tools, TrusMeet is rooted in cryptographic hardware authentication. Each lab member is issued a personal **C-DAC TrusToken** USB dongle containing their unique digital identity certificate. This guarantees that only authorized lab researchers can join sensitive research reviews, cryptanalysis syncs, and thesis evaluations.
+
+\section{System \& Hardware Requirements}
+You can join TrusMeet meetings from your personal laptop, lab workstation, or mobile phone.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{p{3.5cm}X}
+\toprule
+\textbf{Component} & \textbf{Requirement / Recommendation} \\
+\midrule
+\textbf{Workstation OS} & Ubuntu Linux 22.04/24.04 LTS, Debian 12, macOS, or Windows 10/11. \\
+\textbf{Mobile Devices} & Android (Chrome/Firefox) or iOS (Safari/Chrome). \\
+\textbf{Supported Browsers} & Google Chrome ($\ge 105$), Chromium, Microsoft Edge, Brave, Mozilla Firefox ($\ge 102$). \\
+\textbf{Hardware Token} & Official C-DAC TrusToken USB Cryptographic Dongle (Model v3.3). \\
+\textbf{Peripherals} & Integrated or USB webcam, microphone / headset, and an available USB-A port (or USB-C adapter). \\
+\bottomrule
+\end{tabularx}
+\caption{System Requirements}
+\end{table}
+
+\begin{tipbox}{No Software Installation Required on Client}
+TrusMeet runs directly inside your web browser. You do not need to install any heavy proprietary desktop clients. All WebRTC streaming and Web Audio processing execute in-browser.
+\end{tipbox}
+
+\newpage
+% CHAPTER 2
+\chapter{Hardware Token Setup \& Authentication}
+
+\section{Connecting Your C-DAC TrusToken}
+\begin{enumerate}
+    \item Insert your issued C-DAC TrusToken into an available USB port on your computer.
+    \item Observe the status LED indicator located on the token casing:
+    \begin{itemize}
+        \item \textbf{Solid Red Light}: This is the \textbf{normal power and standby} state. It indicates that the token is receiving power and its internal cryptographic chip has booted securely.
+        \item \textbf{Blinking Red Light}: Occurs when the token is actively processing an authentication request or cryptographic signature.
+    \end{itemize}
+\end{enumerate}
+
+\begin{infobox}{What does the Solid Red Light Mean?}
+A steady, solid red light does \textbf{not} indicate an error. It indicates that the hardware container is locked and waiting for you to enter your PIN.
+\end{infobox}
+
+\section{Step-by-Step Meeting Room Entry}
+
+\subsection{1. Open the Meeting Link}
+Your Principal Investigator (PI) or session lead will share the meeting URL:
+\begin{itemize}
+    \item \textbf{On Campus Wi-Fi / Local Network}: \texttt{https://<SERVER-IP>:8443/?room=LAB-DECIPHERED-SYNC}
+    \item \textbf{Over Mobile Cellular / Remote Internet}: \texttt{https://<TUNNEL-URL>.trycloudflare.com/?room=LAB-DECIPHERED-SYNC}
+\end{itemize}
+
+\subsection{2. Browser Security Prompt (Self-Signed LAN SSL)}
+If connecting over local IP on port 8443, the browser may warn that the SSL certificate is self-signed:
+\begin{enumerate}[noitemsep]
+    \item Click \textbf{"Advanced"}.
+    \item Click \textbf{"Proceed to <IP> (unsafe)"}.
+    \item This is completely normal for lab-hosted internal networks.
+\end{enumerate}
+
+\subsection{3. Camera \& Microphone Permissions}
+When the browser prompts:
+\begin{quote}
+\textit{"<URL> wants to use your microphone and camera"}
+\end{quote}
+Click \textbf{"Allow"}. If you accidentally click "Block", click the padlock icon in your browser URL bar, reset permissions, and refresh the page.
+
+\subsection{4. Hardware Token Authentication (Login Modal)}
+\begin{enumerate}
+    \item The TrusMeet login screen will detect the USB token and display the cryptographic challenge issued by the server.
+    \item Enter your assigned \textbf{Hardware PIN} (e.g., default: \texttt{123456} or your personalized lab PIN).
+    \item Click \textbf{"Authenticate with TrusToken"}.
+    \item The on-chip cryptographic engine will sign the server nonce with your private key. Upon verification against the Lab Root CA, you are granted immediate access to the meeting room.
+\end{enumerate}
+
+\subsection{5. Alternative: Scholar Emulation Profile}
+If you are attending remotely from a phone or a laptop where a physical USB port is unavailable, select your name from the \textbf{"Lab Member Profiles"} list (e.g., \textit{"PhD Scholar"} or \textit{"Research Scholar"}). Enter your scholar credentials to join with member-tier privileges.
+
+\newpage
+% CHAPTER 3
+\chapter{In-Meeting Collaboration \& Features}
+
+\section{The Video Conference Interface}
+Once inside the room, you will see the modern TrusMeet dark glassmorphic dashboard:
+\begin{itemize}
+    \item \textbf{Video Grid}: Dynamically arranges participant video feeds.
+    \item \textbf{Active Speaker HUD}: The border of the participant currently speaking glows with a neon cyan highlight, driven by real-time audio energy analysis.
+    \item \textbf{Role Badges}: Displays the authenticated role of each attendee (e.g., \textit{"Principal Investigator"}, \textit{"PhD Scholar"}, \textit{"Security Researcher"}).
+\end{itemize}
+
+\section{Meeting Controls (Bottom Toolbar)}
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{cp{4cm}X}
+\toprule
+\textbf{Icon} & \textbf{Control Action} & \textbf{Description} \\
+\midrule
+\textbf{Mic} & Toggle Microphone & Mutes or unmutes your audio. Use when listening to avoid background noise. \\
+\textbf{Camera} & Toggle Video & Starts or stops your webcam feed. \\
+\textbf{Screen} & Share Screen & Allows sharing entire display, application windows (e.g., VS Code, Terminal), or browser tabs. \\
+\textbf{Chat} & Toggle Lab Chat & Opens the side drawer for real-time encrypted messaging and link sharing. \\
+\textbf{Phone} & Leave Meeting & Gracefully leaves the room and terminates WebRTC peer connections. \\
+\bottomrule
+\end{tabularx}
+\caption{Toolbar Controls}
+\end{table}
+
+\section{Presenting Research Papers \& Code Walkthroughs}
+To share your slides or code:
+\begin{enumerate}[noitemsep]
+    \item Click the \textbf{"Share Screen"} button on the bottom control bar.
+    \item Select either \textbf{"Entire Screen"} or \textbf{"Window"} (recommended for PDF presentations or code editors).
+    \item If sharing a video with audio, check \textbf{"Share system audio"}.
+    \item Click \textbf{"Share"}. Your stream will appear as the primary feed for all participants.
+    \item To stop presenting, click the blue \textbf{"Stop Sharing"} bar at the bottom of your screen.
+\end{enumerate}
+
+\newpage
+% CHAPTER 4
+\chapter{The Hardware Presence Rule (Heartbeat)}
+
+\section{Continuous Hardware Liveness Check}
+TrusMeet enforces continuous cryptographic liveness:
+\begin{itemize}
+    \item Every 12--15 seconds, a micro-challenge is sent to your C-DAC TrusToken.
+    \item Your token answers the challenge via PKCS\#11 to prove that the authorized researcher is still physically present at the computer.
+\end{itemize}
+
+\begin{alertbox}{Important Security Rule: Do NOT Unplug Your Token}
+The C-DAC TrusToken USB dongle \textbf{must remain plugged into your computer} for the entire duration of the meeting.
+\end{alertbox}
+
+\section{What Happens if the Dongle is Unplugged?}
+If the USB token is accidentally or deliberately pulled out:
+\begin{enumerate}
+    \item The client immediately detects the heartbeat failure.
+    \item Your \textbf{microphone is automatically muted} and your \textbf{video stream is paused}.
+    \item A security alert banner appears: \textit{"TrusToken disconnected! Audio and video paused for security."}
+    \item Other participants in the room are notified that your physical token was removed.
+\end{enumerate}
+
+\subsection{How to Restore Access}
+\begin{enumerate}[noitemsep]
+    \item Re-insert your C-DAC TrusToken into the USB port.
+    \item Ensure the red LED returns to steady solid.
+    \item Click the \textbf{"Reconnect Token"} button on the prompt to re-authenticate with your PIN.
+    \item Your camera and microphone will resume automatically.
+\end{enumerate}
+
+\newpage
+% CHAPTER 5
+\chapter{Reviewing \& Co-Signing Meeting Minutes}
+
+\section{The In-Meeting Minutes Pad}
+During lab syncs, the PI or designated scribe updates the \textbf{Lab Meeting Minutes} tab in real time. This pad documents:
+\begin{itemize}[noitemsep]
+    \item Research experiment progress and cryptanalysis milestones.
+    \item Paper submission deadlines and task assignments.
+    \item Thesis approvals and equipment requisitions.
+\end{itemize}
+
+\section{Cryptographic Sign-Off Workflow}
+At the conclusion of the meeting:
+\begin{enumerate}
+    \item All scholars review the minutes text in the side panel.
+    \item The PI locks the minutes and triggers the \textbf{Cryptographic PDF Signing Protocol}.
+    \item The document is converted to an ISO 32000-1 PDF and signed with a detached CMS/PKCS\#7 digital signature using the hardware token.
+    \item A signed copy (\texttt{minutes\_signed.pdf}) is generated and archived.
+\end{enumerate}
+
+\section{Verifying the Signed Minutes on Your Machine}
+Any lab member can verify the mathematical authenticity of the meeting minutes:
+\begin{lstlisting}[language=bash]
+pdfsig minutes_signed.pdf
+\end{lstlisting}
+The output will display:
+\begin{lstlisting}[language=bash]
+Signature #1:
+  - Signer Certificate Common Name: Dr. Dhiman Saha
+  - Signing Time: Verified
+  - Digest Algorithm: SHA-256
+  - Status: The signature is valid. Document has not been modified.
+\end{lstlisting}
+
+\newpage
+% CHAPTER 6
+\chapter{Frequently Asked Questions \& Troubleshooting}
+
+\section{Common Questions}
+
+\subsection{Why does my token show a solid red light?}
+The solid red light is normal. It indicates that the token is receiving power and is in secure standby waiting for PIN authentication.
+
+\subsection{Why can't I access camera/mic when opening \texttt{http://10.10.x.x:8080}?}
+Modern browsers disable camera and microphone access on non-secure (plain HTTP) network IP addresses. Always use the **HTTPS** link (\texttt{https://...:8443}) or the Cloudflare tunnel link.
+
+\subsection{What should I do if my PIN fails 3 times?}
+To protect against brute-force attacks, C-DAC TrusTokens lock after repeated wrong PIN entries. If you have forgotten your PIN, contact the Lab Administrator (Krishna Saha) to reset it via the administrator PUK.
+
+\subsection{Can I attend using my smartphone?}
+Yes! Open the shared Cloudflare tunnel URL in Chrome or Safari on your phone. You can use your scholar emulation profile to participate fully in audio, video, and chat.
+
+\section{Quick Diagnostic Checklist}
+\begin{table}[h!]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Issue} & \textbf{Quick Fix} \\
+\midrule
+Audio echoing & Use a headset or earphones to eliminate room acoustic feedback. \\
+Video lagging & Check your Wi-Fi signal or switch to a wired Ethernet connection. \\
+Token not recognized & Ensure the USB connector is pushed firmly into the port. \\
+Accidentally blocked mic & Click the padlock icon in the browser address bar and toggle Microphone to \textbf{"Allow"}. \\
+\bottomrule
+\end{tabularx}
+\caption{Quick Diagnostic Guide}
+\end{table}
+
+\vspace{2cm}
+\begin{center}
+\textbf{--- End of Lab Member \& Scholar User Manual ---}\\
+\small \textit{de.ci.phe.red LAB $\cdot$ Department of CSE $\cdot$ Indian Institute of Technology Bhilai}
+\end{center}
+
+\end{document}
+

@@ -30,18 +30,15 @@ class WebRTCManager {
     this.mediaRecorder = null;
     this.recordedChunks = [];
 
-    // High-Reliability STUN Configuration (Google & Cloudflare fast relays)
+    // STUN by default; setIceServers() adds relay (TURN) servers from the server.
     this.rtcConfig = {
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
         { urls: 'stun:stun.cloudflare.com:3478' }
       ],
-      iceCandidatePoolSize: 10
+      iceCandidatePoolSize: 4
     };
+    this.onPeerConnectionState = null; // (peerId, 'connecting' | 'connected' | 'failed')
 
     // Voice Relay over WebSocket fallback
     this.voiceRelayRecorder = null;
@@ -220,13 +217,13 @@ class WebRTCManager {
       angle += 0.03;
       // Background gradient
       const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-      grad.addColorStop(0, '#0f172a');
-      grad.addColorStop(1, '#020617');
+      grad.addColorStop(0, '#0d222a');
+      grad.addColorStop(1, '#030c10');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       // Cybernetic grid
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.15)';
+      ctx.strokeStyle = 'rgba(47, 179, 224, 0.15)';
       ctx.lineWidth = 1;
       for (let x = 0; x < canvas.width; x += 40) {
         ctx.beginPath();
@@ -246,23 +243,23 @@ class WebRTCManager {
       const cy = canvas.height / 2 - 20;
       ctx.beginPath();
       ctx.arc(cx, cy, 60 + Math.sin(angle) * 5, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+      ctx.strokeStyle = 'rgba(76, 184, 72, 0.6)';
       ctx.lineWidth = 4;
       ctx.stroke();
 
       // Lab Avatar Icon
-      ctx.fillStyle = '#f8fafc';
+      ctx.fillStyle = '#eef6f3';
       ctx.font = 'bold 36px Outfit, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label.split(' ').map(w => w[0]).join('').slice(0, 2), cx, cy);
 
       // Watermark Text
-      ctx.fillStyle = '#38bdf8';
+      ctx.fillStyle = '#6fd4f4';
       ctx.font = '600 16px Inter, sans-serif';
       ctx.fillText(`Placeholder video (no camera): ${label}`, cx, canvas.height - 50);
 
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = '#7b9794';
       ctx.font = '12px JetBrains Mono, monospace';
       ctx.fillText(new Date().toLocaleTimeString(), cx, canvas.height - 25);
 
@@ -326,6 +323,46 @@ class WebRTCManager {
     }
   }
 
+  setIceServers(iceServers) {
+    if (Array.isArray(iceServers) && iceServers.length) {
+      this.rtcConfig = { ...this.rtcConfig, iceServers };
+    }
+  }
+
+  reportConnection(peerId, status) {
+    if (this.onPeerConnectionState) this.onPeerConnectionState(peerId, status);
+  }
+
+  // Browsers can sit in "connecting" forever when no route exists, so a
+  // connection that isn't up within 20 seconds counts as failed.
+  armConnectWatchdog(peerId) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    clearTimeout(peer.watchdog);
+    peer.watchdog = setTimeout(() => {
+      if (this.peers.get(peerId) !== peer || peer.pc.connectionState === 'connected') return;
+      this.startVoiceRelay();
+      this.reportConnection(peerId, 'failed');
+      this.restartConnection(peerId);
+    }, 20000);
+  }
+
+  // A failed connection is retried with fresh routes (ICE restart) a few times.
+  // Only the side that made the first offer restarts, so the two never collide.
+  restartConnection(peerId) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.isInitiator || peer.restarts >= 3 || this.closed) return;
+    peer.restarts += 1;
+    this.armConnectWatchdog(peerId);
+    peer.pc.createOffer({ iceRestart: true })
+      .then((offer) => peer.pc.setLocalDescription(offer))
+      .then(() => this.socket.emit('signal', {
+        targetPeerId: peerId,
+        signalData: { type: 'offer', sdp: peer.pc.localDescription }
+      }))
+      .catch((err) => console.warn('[WebRTC] ICE restart failed:', err));
+  }
+
   // 3. WebRTC Peer Connection Factory
   createPeerConnection(peerId, isInitiator, peerUser) {
     if (this.peers.has(peerId)) {
@@ -333,7 +370,8 @@ class WebRTCManager {
     }
 
     const pc = new RTCPeerConnection(this.rtcConfig);
-    const peerData = { pc, stream: new MediaStream(), user: peerUser, candidateQueue: [] };
+    const peerData = { pc, stream: new MediaStream(), user: peerUser, candidateQueue: [], isInitiator, restarts: 0, retryTimer: null, watchdog: null };
+    this.reportConnection(peerId, 'connecting');
     this.peers.set(peerId, peerData);
 
     // Add local tracks to peer connection
@@ -380,16 +418,38 @@ class WebRTCManager {
     };
 
     pc.onconnectionstatechange = () => {
-      console.log(`[WebRTC] Connection state with ${peerId}:`, pc.connectionState);
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        console.warn(`[WebRTC] Peer ${peerId} connection state: ${pc.connectionState}. Ensuring Voice Relay fallback is active.`);
+      const st = pc.connectionState;
+      console.log(`[WebRTC] Connection state with ${peerId}:`, st);
+      clearTimeout(peerData.retryTimer);
+      if (st === 'connected') {
+        peerData.restarts = 0;
+        clearTimeout(peerData.watchdog);
+        this.reportConnection(peerId, 'connected');
+      } else if (st === 'failed') {
+        clearTimeout(peerData.watchdog);
         this.startVoiceRelay();
+        this.reportConnection(peerId, 'failed');
+        this.restartConnection(peerId);
+      } else if (st === 'disconnected') {
+        // Often recovers by itself; retry only if it doesn't within a few seconds.
+        this.startVoiceRelay();
+        this.reportConnection(peerId, 'connecting');
+        peerData.retryTimer = setTimeout(() => {
+          if (pc.connectionState === 'disconnected') {
+            this.reportConnection(peerId, 'failed');
+            this.restartConnection(peerId);
+          }
+        }, 5000);
+      } else if (st === 'connecting') {
+        this.reportConnection(peerId, 'connecting');
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       console.log(`[WebRTC] ICE Connection state with ${peerId}:`, pc.iceConnectionState);
     };
+
+    this.armConnectWatchdog(peerId);
 
     // Initiator sends SDP Offer
     if (isInitiator) {
@@ -535,6 +595,7 @@ class WebRTCManager {
 
     this.isScreenSharing = false;
     this.socket.emit('toggle-media-state', { type: 'screen', enabled: false });
+    if (this.onScreenShareChanged) this.onScreenShareChanged(false);
   }
 
   // 6. Audio/Video controls
@@ -679,6 +740,8 @@ class WebRTCManager {
     const peer = this.peers.get(peerId);
     this.relayPlayback.delete(peerId);
     if (peer) {
+      clearTimeout(peer.retryTimer);
+      clearTimeout(peer.watchdog);
       peer.pc.close();
       this.peers.delete(peerId);
       if (this.onPeerStreamRemoved) {
@@ -690,7 +753,7 @@ class WebRTCManager {
   closeAll() {
     this.closed = true;
     this.stopBlankPainter();
-    this.peers.forEach((peer) => peer.pc.close());
+    this.peers.forEach((peer) => { clearTimeout(peer.retryTimer); clearTimeout(peer.watchdog); peer.pc.close(); });
     this.peers.clear();
 
     if (this.localStream) {

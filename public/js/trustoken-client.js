@@ -93,6 +93,11 @@ class TrusTokenClient {
     return (await this.api('/api/meetings/mine')).meetings;
   }
 
+  // STUN plus, when set up, Metered relay (TURN) servers for this session
+  async iceServers() {
+    return (await this.api('/api/ice-servers')).iceServers;
+  }
+
   // 2. Ask the local helper whether the USB token is plugged in
   async checkLocalToken() {
     const permission = await this.helperPermission();
@@ -166,8 +171,9 @@ class TrusTokenClient {
   }
 
   // 5. Digitally sign meeting minutes
-  async signMeetingMinutes(roomId, password, minutesText) {
-    return this.api('/api/minutes/sign', { method: 'POST', body: { roomId, password, minutesText } });
+  // decision: 'approved' or 'not_approved' (with an optional reason)
+  async signMeetingMinutes(roomId, password, minutesText, decision = 'approved', reason = '') {
+    return this.api('/api/minutes/sign', { method: 'POST', body: { roomId, password, minutesText, decision, reason } });
   }
 }
 

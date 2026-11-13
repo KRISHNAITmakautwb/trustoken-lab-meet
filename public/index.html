@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TrusMeet | Video Meetings with USB Token Check</title>
+  <title>TrusMeet | de.ci.phe.red. Lab, IIT Bhilai</title>
+  <link rel="icon" type="image/png" href="/branding/favicon.png">
+  <link rel="apple-touch-icon" href="/branding/logo.png">
   <meta name="description" content="Video meetings where anyone can create a profile and host. USB token users enter directly; others join after the host accepts them.">
   <link rel="stylesheet" href="/css/index.css">
 </head>
@@ -12,15 +14,12 @@
   <!-- Top Security Header -->
   <header class="top-nav" id="main-nav">
     <div class="brand-container">
-      <div class="brand-logo-icon">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
+      <div class="brand-logo-icon brand-logo-image">
+        <img src="/branding/logo.png" alt="Logo" data-brand-logo onerror="this.onerror=null; this.src='/assets/lab-logo.png';" width="44" height="44">
       </div>
       <div class="brand-title">
-        <h1>TrusMeet Lab Conference</h1>
-        <div class="brand-subtitle">Video Meetings &bull; C-DAC TrusToken</div>
+        <h1 data-brand-name>de.ci.phe.red. Lab, IIT Bhilai</h1>
+        <div class="brand-subtitle" data-brand-subtitle>TrusMeet &bull; Video meetings with TrusToken check</div>
       </div>
     </div>
 
@@ -46,6 +45,17 @@
   <main id="lobby-view" class="lobby-container">
     <!-- Left Column: Sign Up, Log In and Meetings -->
     <section class="lobby-panel">
+      <div class="lobby-brand">
+        <div class="lobby-brand-logo">
+          <img src="/branding/logo.png" alt="Logo" data-brand-logo onerror="this.onerror=null; this.src='/assets/lab-logo.png';" width="128" height="128">
+        </div>
+        <div class="lobby-brand-text">
+          <div class="lobby-brand-welcome">Welcome to</div>
+          <div class="lobby-brand-name" data-brand-name>de.ci.phe.red. Lab, IIT Bhilai</div>
+          <div class="lobby-brand-tagline">TrusMeet: secure lab meetings, signed minutes and USB token check</div>
+        </div>
+      </div>
+
       <div class="panel-header">
         <div>
           <div class="panel-title">
@@ -167,7 +177,7 @@
       </div>
 
       <!-- Security Purposes Card -->
-      <div style="background:rgba(15,23,42,0.6); border:1px solid var(--border-subtle); border-radius:16px; padding:1.25rem;">
+      <div style="background:rgba(13, 34, 42,0.6); border:1px solid var(--border-subtle); border-radius:16px; padding:1.25rem;">
         <div style="font-weight:700; font-size:0.95rem; color:var(--text-primary); margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem;">
           <span style="color:var(--cyan-400);">🛡️</span> How Security Works Today:
         </div>
@@ -188,11 +198,8 @@
     <!-- Conference Header -->
     <div class="conference-header">
       <div class="conf-room-details">
-        <div class="brand-logo-icon" style="width:36px; height:36px;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-          </svg>
+        <div class="brand-logo-icon brand-logo-image conf-logo">
+          <img src="/branding/logo.png" alt="Logo" data-brand-logo onerror="this.onerror=null; this.src='/assets/lab-logo.png';" width="40" height="40">
         </div>
         <div>
           <div class="conf-room-title" id="conf-room-title">Meeting</div>
@@ -258,17 +265,104 @@
           <button class="drawer-close-btn">&times;</button>
         </div>
         <div class="drawer-body">
-          <p style="font-size:0.82rem; color:var(--text-secondary);">
-            Collaborative real-time notes pad. Sign milestones and meeting decisions with your lab software key.
-          </p>
-          <textarea id="minutes-editor" class="minutes-editor" placeholder="Record meeting minutes, research milestones, and approved action items here..."></textarea>
-          
-          <button id="btn-sign-minutes" class="btn-primary" style="width:100%;">
-            <span>✍️ Sign Minutes (Software Key)</span>
-          </button>
+          <p class="minutes-hint">Everyone in the meeting can edit these minutes. Changes appear for all.</p>
+          <form id="minutes-form" class="minutes-form" autocomplete="off" onsubmit="return false;">
+            <fieldset class="minutes-group">
+              <legend>Meeting details</legend>
+              <label class="minutes-field"><span>Organisation</span>
+                <input type="text" data-minutes-field="organisation" maxlength="200" placeholder="Name of the institute"></label>
+              <div class="minutes-row">
+                <label class="minutes-field"><span>Department / lab</span>
+                  <input type="text" data-minutes-field="department" maxlength="200" placeholder="Department / lab"></label>
+                <label class="minutes-field"><span>Reference No.</span>
+                  <input type="text" data-minutes-field="refNo" maxlength="100" placeholder="Optional"></label>
+              </div>
+              <label class="minutes-field"><span>Meeting title</span>
+                <input type="text" data-minutes-field="title" maxlength="200"></label>
+              <div class="minutes-row">
+                <label class="minutes-field"><span>Date</span>
+                  <input type="date" data-minutes-field="date"></label>
+                <label class="minutes-field"><span>Start</span>
+                  <input type="time" data-minutes-field="startTime"></label>
+                <label class="minutes-field"><span>End</span>
+                  <input type="time" data-minutes-field="endTime"></label>
+              </div>
+              <label class="minutes-field"><span>Venue</span>
+                <input type="text" data-minutes-field="venue" maxlength="200" placeholder="Video conference (TrusMeet)"></label>
+              <div class="minutes-row">
+                <label class="minutes-field"><span>Chairperson</span>
+                  <input type="text" data-minutes-field="chair" maxlength="200" list="minutes-people"></label>
+                <label class="minutes-field"><span>Designation</span>
+                  <input type="text" data-minutes-field="chairDesignation" maxlength="200" placeholder="e.g. Professor"></label>
+              </div>
+              <div class="minutes-row">
+                <label class="minutes-field"><span>Minutes recorded by (Member Secretary)</span>
+                  <input type="text" data-minutes-field="minuteTaker" maxlength="200" list="minutes-people"></label>
+                <label class="minutes-field"><span>Designation</span>
+                  <input type="text" data-minutes-field="minuteTakerDesignation" maxlength="200" placeholder="e.g. PhD Scholar"></label>
+              </div>
+              <label class="minutes-field"><span>Present</span>
+                <textarea data-minutes-field="present" rows="2" maxlength="5000" placeholder="Filled in as people join. Names separated by commas"></textarea></label>
+              <button type="button" id="btn-minutes-fill-present" class="btn-secondary minutes-small-btn">↻ Fill in everyone in this meeting</button>
+              <p id="minutes-roles-warning" class="minutes-warning" role="status" style="display:none;"></p>
+              <label class="minutes-field"><span>Absent / apologies</span>
+                <input type="text" data-minutes-field="absent" maxlength="5000" placeholder="Nil"></label>
+            </fieldset>
+
+            <fieldset class="minutes-group">
+              <legend>1. Agenda</legend>
+              <textarea data-minutes-field="agenda" rows="3" maxlength="20000" placeholder="One item per line" aria-label="Agenda, one item per line"></textarea>
+            </fieldset>
+            <fieldset class="minutes-group">
+              <legend>2. Discussion</legend>
+              <textarea data-minutes-field="discussion" rows="5" maxlength="50000" placeholder="Main points discussed" aria-label="Discussion"></textarea>
+            </fieldset>
+            <fieldset class="minutes-group">
+              <legend>3. Decisions</legend>
+              <textarea data-minutes-field="decisions" rows="3" maxlength="20000" placeholder="One decision per line" aria-label="Decisions, one per line"></textarea>
+            </fieldset>
+            <fieldset class="minutes-group">
+              <legend>4. Action items</legend>
+              <div id="minutes-actions" class="minutes-actions"></div>
+              <button type="button" id="btn-minutes-add-action" class="btn-secondary minutes-small-btn">+ Add action item</button>
+            </fieldset>
+            <fieldset class="minutes-group">
+              <legend>5. Next meeting</legend>
+              <input type="text" data-minutes-field="nextMeeting" maxlength="500" placeholder="Date and time, or leave empty" aria-label="Next meeting">
+            </fieldset>
+            <fieldset class="minutes-group">
+              <legend>Distribution</legend>
+              <label class="minutes-field"><span>To</span>
+                <input type="text" value="All participants" disabled></label>
+              <label class="minutes-field"><span>Copy to</span>
+                <input type="text" data-minutes-field="copyTo" maxlength="2000" placeholder="e.g. Head of Department (optional)"></label>
+            </fieldset>
+          </form>
+
+          <details class="minutes-preview">
+            <summary>Preview the text that will be signed</summary>
+            <pre id="minutes-preview-text"></pre>
+          </details>
+
+          <div class="approval-actions">
+            <button id="btn-sign-minutes" class="btn-primary"><span>✅ Approve</span></button>
+            <button id="btn-disapprove-minutes" class="btn-secondary"><span>✋ Not approve</span></button>
+          </div>
+          <p class="minutes-hint">Your choice is signed with your password. Anyone who doesn't choose is shown as not approved.
+            For the audit trail, the server records your IP address and the time with your choice. It appears in the verification file, not on the minutes.</p>
+
+          <div class="approval-status">
+            <div class="approval-status-title">Approval of this version <span id="approval-summary"></span></div>
+            <p id="approval-chair" class="approval-chair pending"></p>
+            <ul id="approval-list" class="approval-list"></ul>
+            <div class="signature-download-row">
+              <button type="button" id="btn-download-minutes" class="btn-secondary signature-pdf-btn" disabled>⬇ Download minutes (PDF)</button>
+              <button type="button" id="btn-download-verification" class="btn-secondary signature-pdf-btn" disabled>⬇ Verification file</button>
+            </div>
+          </div>
 
           <div style="font-weight:700; font-size:0.88rem; color:var(--text-primary); margin-top:0.5rem;">
-            Signatures:
+            Signed decisions:
           </div>
           <div id="signatures-list" style="display:flex; flex-direction:column; gap:0.85rem;">
             <!-- Signatures rendered here -->
@@ -430,6 +524,22 @@
     </div>
   </div>
 
+  <!-- Optional reason for not approving the minutes -->
+  <div class="modal-backdrop" id="reason-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div style="font-size:2.5rem; margin-bottom:0.5rem;">✋</div>
+        <h3>Not Approving the Minutes</h3>
+        <p>Why don't you approve them? This is optional, but it helps everyone fix the minutes.</p>
+      </div>
+      <textarea id="reason-input" class="auth-input" rows="4" maxlength="1000" style="width:100%; resize:vertical;" aria-label="Reason (optional)" placeholder="Reason (optional)"></textarea>
+      <div style="display:flex; gap:0.75rem;">
+        <button id="btn-cancel-reason" class="btn-secondary" style="flex:1;">Cancel</button>
+        <button id="btn-submit-reason" class="btn-primary" style="flex:1;">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- USB token question and plug-in step -->
   <div class="modal-backdrop" id="choice-modal">
     <div class="modal-card">
@@ -478,6 +588,9 @@
   <!-- Scripts -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/webrtc.js"></script>
+  <script src="/js/recorder.js"></script>
+  <script src="/js/minutes-doc.js"></script>
+  <script src="/js/minutes-pdf.js"></script>
   <script src="/js/trustoken-client.js"></script>
   <script src="/js/app.js"></script>
 </body>

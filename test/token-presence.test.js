@@ -125,6 +125,8 @@ before(async () => {
     SIGNUP_CODE,
     PORT: '18443',
     HTTP_PORT: String(HTTP_PORT),
+    METERED_DOMAIN: '',
+    METERED_API_KEY: '',
     TOKEN_LEASE_MS: String(LEASE_MS)
   };
   await startServer();
@@ -231,6 +233,19 @@ test('private data needs a login, and the old public lists are gone', async () =
   assert.strictEqual((await request('/api/rooms', { method: 'GET' })).status, 404);
 });
 
+test('relay settings need a login and fall back to STUN when Metered is not set up', async () => {
+  assert.strictEqual((await request('/api/ice-servers', { method: 'GET' })).status, 401);
+  const user = await newUser('ice');
+  const res = await request('/api/ice-servers', { method: 'GET', token: user.token });
+  assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+  const data = await res.json();
+  assert.strictEqual(data.relay, false);
+  assert.ok(data.iceServers.length > 0);
+  for (const server of data.iceServers) {
+    for (const url of [].concat(server.urls)) assert.match(url, /^stun:/);
+  }
+});
+
 test('the admin reset issues a new password and clears a lock', async () => {
   const a = await newUser('reset');
   const result = JSON.parse(bridge(['admin-reset', a.username]).stdout);
@@ -296,7 +311,7 @@ test('an unverified user waits and receives nothing until the host accepts', asy
 
   // Nothing reaches the waiting person, and nothing they send reaches the room.
   let leaked = 0;
-  ['chat-broadcast', 'minutes-broadcast', 'user-joined', 'signal'].forEach((e) => guest.socket.on(e, () => { leaked += 1; }));
+  ['chat-broadcast', 'minutes-patch', 'user-joined', 'signal'].forEach((e) => guest.socket.on(e, () => { leaked += 1; }));
   let heard = 0;
   ['chat-broadcast', 'signal', 'voice-packet-broadcast'].forEach((e) => host.socket.on(e, () => { heard += 1; }));
   host.socket.emit('chat-message', { text: 'private' });
@@ -654,7 +669,7 @@ test('helper only answers allowed web origins', async () => {
 
 test('malformed messages from a stranger cannot crash the server', async () => {
   const socket = await connect();
-  const events = ['signal', 'voice-packet', 'toggle-media-state', 'chat-message', 'minutes-update',
+  const events = ['signal', 'voice-packet', 'toggle-media-state', 'chat-message', 'minutes-patch',
     'token-presence', 'host-action', 'join-room', 'admission-decision'];
   for (const event of events) {
     socket.emit(event);
@@ -670,12 +685,57 @@ test('malformed messages from a stranger cannot crash the server', async () => {
 
 test('malformed messages from a host in a meeting cannot crash the server', async () => {
   const { host } = await hostedMeeting();
-  ['admission-decision', 'host-action', 'chat-message', 'signal'].forEach((event) => {
+  ['admission-decision', 'host-action', 'chat-message', 'signal', 'minutes-patch'].forEach((event) => {
     host.socket.emit(event);
-    host.socket.emit(event, { peerId: 'nope', accept: true, action: 'kick-peer', targetPeerId: {}, text: 5 });
+    host.socket.emit(event, { peerId: 'nope', accept: true, action: 'kick-peer', targetPeerId: {}, text: 5, field: 'actions', value: [null, 5] });
   });
   await sleep(300);
   assert.strictEqual(server.exitCode, null);
+});
+
+test('minutes are edited field by field, checked, and given to people who join later', async () => {
+  const { meeting, host } = await hostedMeeting();
+  const guest = await joinWaiting(meeting.id, await newUser('mguest'), host);
+  const guestIn = once(guest.socket, 'room-joined-success');
+  host.socket.emit('admission-decision', { peerId: guest.request.peerId, accept: true });
+  await guestIn;
+
+  const got = once(guest.socket, 'minutes-patch');
+  host.socket.emit('minutes-patch', { field: 'agenda', value: 'Budget' });
+  assert.deepStrictEqual(await got, { field: 'agenda', value: 'Budget' });
+
+  let bad = 0;
+  guest.socket.on('minutes-patch', () => { bad += 1; });
+  host.socket.emit('minutes-patch', { field: '__proto__', value: 'x' });
+  host.socket.emit('minutes-patch', { field: 'date', value: 'x'.repeat(50) });
+  host.socket.emit('minutes-patch', { field: 'agenda', value: 42 });
+  host.socket.emit('minutes-patch', { field: 'actions', value: 'not a list' });
+  await sleep(200);
+  assert.strictEqual(bad, 0);
+
+  const rows = once(guest.socket, 'minutes-patch');
+  host.socket.emit('minutes-patch', { field: 'actions', value: [{ task: 'Write report', owner: 'Ben', due: '2026-11-20', extra: 'dropped' }] });
+  assert.deepStrictEqual((await rows).value, [{ task: 'Write report', owner: 'Ben', due: '2026-11-20' }]);
+
+  const late = await joinWaiting(meeting.id, await newUser('mlate'), host);
+  const lateIn = once(late.socket, 'room-joined-success');
+  host.socket.emit('admission-decision', { peerId: late.request.peerId, accept: true });
+  const joined = await lateIn;
+  assert.strictEqual(joined.minutesDoc.agenda, 'Budget');
+  assert.strictEqual(joined.minutesDoc.actions[0].owner, 'Ben');
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(joined.minutesDoc, '__proto__'), false);
+});
+
+test('branding: defaults without a branding file, and only the three logo files are served', async () => {
+  const brand = await (await request('/api/branding', { method: 'GET' })).json();
+  assert.strictEqual(brand.name, 'de.ci.phe.red. Lab, IIT Bhilai');
+  assert.strictEqual(brand.organisation, 'Indian Institute of Technology Bhilai');
+  for (const file of ['logo.png', 'favicon.png', 'logo-pdf.jpg']) {
+    assert.strictEqual((await request(`/branding/${file}`, { method: 'GET' })).status, 200);
+  }
+  for (const bad of ['branding.json', '..%2Fserver.key', '..%2F..%2Fserver.js', 'x.png']) {
+    assert.strictEqual((await request(`/branding/${bad}`, { method: 'GET' })).status, 404, bad);
+  }
 });
 
 test('a socket from another website is refused', async () => {
@@ -713,6 +773,46 @@ test('a signature is tied to the meeting, time and status, and tampering is dete
   assert.strictEqual(verify({}), true);
   assert.strictEqual(verify({ signed_payload: JSON.stringify({ ...signed, meeting_id: 'other' }) }), false);
   assert.strictEqual(verify({ cert_pem: 'not a certificate' }), false);
+});
+
+test('anyone can record "not approved" with a reason, and the decision is part of the signature', async () => {
+  const { meeting, host } = await hostedMeeting();
+  const sign = (body) => post('/api/minutes/sign', { roomId: meeting.id, password: PASSWORD, minutesText: 'decided', ...body }, host.account.token);
+
+  const approved = await sign({});
+  assert.strictEqual(approved.decision, 'approved');
+  assert.strictEqual(JSON.parse(approved.signed_payload).decision, 'approved');
+
+  const objection = await sign({ decision: 'not_approved', reason: 'Item 2 is wrong' });
+  const signed = JSON.parse(objection.signed_payload);
+  assert.strictEqual(objection.decision, 'not_approved');
+  assert.deepStrictEqual([signed.decision, signed.reason, signed.version], ['not_approved', 'Item 2 is wrong', 3]);
+  assert.strictEqual(objection.user_id, host.account.username);
+
+  // Changing the decision or the reason breaks the signature.
+  const verify = (fields) => JSON.parse(bridge(['verify-receipt'], JSON.stringify({ ...objection, ...fields })).stdout).valid;
+  assert.strictEqual(verify({}), true);
+  assert.strictEqual(verify({ signed_payload: JSON.stringify({ ...signed, decision: 'approved' }) }), false);
+  assert.strictEqual(verify({ signed_payload: JSON.stringify({ ...signed, reason: '' }) }), false);
+
+  // Audit trail: the server records where the decision came from, outside the signature.
+  const viaTunnel = await (await request('/api/minutes/sign', { body: { roomId: meeting.id, password: PASSWORD, minutesText: 'decided' }, token: host.account.token, ip: '203.0.113.7' })).json();
+  assert.strictEqual(viaTunnel.audit.ip, '203.0.113.7');
+  assert.strictEqual(viaTunnel.audit.connection, 'Cloudflare link');
+  assert.ok(!viaTunnel.signed_payload.includes('203.0.113.7'));
+  await sleep(200);
+  const logFile = path.join(dataDir, 'minutes-audit.log');
+  assert.strictEqual(fs.statSync(logFile).mode & 0o777, 0o600);
+  const logged = fs.readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const entry = logged.find((l) => l.ip === '203.0.113.7');
+  assert.strictEqual(entry.user_id, host.account.username);
+  assert.strictEqual(entry.minutes_sha256, viaTunnel.document_sha256);
+  assert.strictEqual(entry.signature_sha256, require('node:crypto').createHash('sha256').update(viaTunnel.signature_b64).digest('hex'));
+
+  for (const bad of [{ decision: 'maybe' }, { decision: 'not_approved', reason: 'x'.repeat(1001) }, { reason: 5 }]) {
+    const res = await request('/api/minutes/sign', { body: { roomId: meeting.id, password: PASSWORD, minutesText: 'decided', ...bad }, token: host.account.token });
+    assert.strictEqual(res.status, 400);
+  }
 });
 
 test('a chat message is limited in size', async () => {

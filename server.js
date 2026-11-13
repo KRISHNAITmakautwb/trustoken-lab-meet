@@ -39,6 +39,45 @@ const app = express();
 app.use(express.json({ limit: '256kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// =============================================================================
+// BRANDING (per installation)
+// =============================================================================
+// Each institute sets its own name and logo with set-branding.py, which writes
+// data/branding/branding.json and the logo files. Without it, the defaults below
+// and the logo in public/assets are used.
+const BRANDING_DIR = path.join(DATA_DIR, 'branding');
+const BRANDING_DEFAULTS = {
+  name: 'de.ci.phe.red. Lab, IIT Bhilai',
+  subtitle: 'TrusMeet \u2022 Video meetings with TrusToken check',
+  organisation: 'Indian Institute of Technology Bhilai',
+  department: 'de.ci.phe.red. Lab'
+};
+const BRANDING_FILES = { 'logo.png': 'lab-logo.png', 'favicon.png': 'favicon.png', 'logo-pdf.jpg': 'lab-logo-pdf.jpg' };
+
+function loadBranding() {
+  let saved = {};
+  try {
+    saved = JSON.parse(fs.readFileSync(path.join(BRANDING_DIR, 'branding.json'), 'utf8'));
+  } catch {
+    // no branding file: defaults
+  }
+  const pick = (key, max) => (typeof saved[key] === 'string' && saved[key].length <= max ? saved[key] : BRANDING_DEFAULTS[key]);
+  return { name: pick('name', 120), subtitle: pick('subtitle', 160), organisation: pick('organisation', 200), department: pick('department', 200) };
+}
+
+app.get('/api/branding', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.json({ success: true, ...loadBranding() });
+});
+
+app.get('/branding/:file', (req, res) => {
+  const fallback = BRANDING_FILES[req.params.file];
+  if (!fallback) return res.status(404).end();
+  const custom = path.join(BRANDING_DIR, req.params.file);
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(fs.existsSync(custom) ? custom : path.join(__dirname, 'public', 'assets', fallback));
+});
+
 const certPath = path.join(__dirname, 'server.crt');
 const keyPath = path.join(__dirname, 'server.key');
 let server;
@@ -111,6 +150,30 @@ function clientIp(req) {
   const remote = req.socket.remoteAddress;
   const forwarded = req.get('cf-connecting-ip');
   return LOOPBACK.has(remote) && forwarded ? forwarded : remote;
+}
+
+// Audit trail for approvals: where and when each decision came from, as seen
+// by this server. Kept with the signature and in a private log file; it is not
+// printed on the minutes.
+const AUDIT_FILE = path.join(DATA_DIR, 'minutes-audit.log');
+
+function auditInfo(req) {
+  const remote = String(req.socket.remoteAddress || '');
+  const forwarded = LOOPBACK.has(remote) && req.get('cf-connecting-ip');
+  const ip = String(forwarded || remote).replace(/^::ffff:/, '').slice(0, 64);
+  const tailscale = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip);
+  return {
+    ip,
+    connection: forwarded ? 'Cloudflare link' : (tailscale ? 'Tailscale' : (LOOPBACK.has(remote) ? 'This computer' : 'Direct (campus network)')),
+    recorded_at: new Date().toISOString(),
+    recorded_by: 'TrusMeet server'
+  };
+}
+
+function writeAudit(entry) {
+  fs.appendFile(AUDIT_FILE, `${JSON.stringify(entry)}\n`, { mode: 0o600 }, (err) => {
+    if (err) console.warn('[audit] Could not write the audit log:', err.message);
+  });
 }
 
 function createSession(profile) {
@@ -197,6 +260,32 @@ function bridgeFailure(res, err) {
 // MEETING STORE
 // =============================================================================
 
+const MINUTES_TEXT_FIELDS = {
+  title: 200, date: 10, startTime: 5, endTime: 5, timeZone: 40, venue: 200, chair: 200,
+  minuteTaker: 200, present: 5000, absent: 5000, agenda: 20000, discussion: 50000,
+  decisions: 20000, nextMeeting: 500,
+  // Indian official format
+  organisation: 200, department: 200, refNo: 100, chairDesignation: 200,
+  minuteTakerDesignation: 200, copyTo: 2000
+};
+
+// Returns the cleaned value, or undefined if the field or value isn't allowed.
+function cleanMinutesField(field, value) {
+  if (Object.prototype.hasOwnProperty.call(MINUTES_TEXT_FIELDS, field)) {
+    return typeof value === 'string' && value.length <= MINUTES_TEXT_FIELDS[field] ? value : undefined;
+  }
+  if (field === 'actions') {
+    if (!Array.isArray(value) || value.length > 100) return undefined;
+    const rows = value.map((row) => ({
+      task: row && typeof row.task === 'string' ? row.task.slice(0, 1000) : '',
+      owner: row && typeof row.owner === 'string' ? row.owner.slice(0, 200) : '',
+      due: row && typeof row.due === 'string' ? row.due.slice(0, 10) : ''
+    }));
+    return rows;
+  }
+  return undefined;
+}
+
 function hydrateMeeting(saved) {
   return {
     ...saved,
@@ -205,7 +294,8 @@ function hydrateMeeting(saved) {
     droppedUntil: new Map(), // user_id -> time their reconnect grace ends
     members: new Map(),
     waiting: new Map(),
-    minutes: '### Meeting Minutes\n\n',
+    minutesDoc: {}, // structured minutes, edited together field by field
+    attendees: new Map(), // user_id -> name of everyone admitted to this meeting
     signatures: []
   };
 }
@@ -315,6 +405,124 @@ app.get('/api/trustoken/hardware', requireSession, async (req, res) => {
 });
 
 // =============================================================================
+// RELAY (TURN) SERVERS
+// =============================================================================
+// Video goes straight between browsers. When two networks block that, a relay
+// (Metered's TURN service) carries it instead; the call stays encrypted end to end.
+// Configure with METERED_DOMAIN + METERED_API_KEY, or data/metered.json
+// ({ "domain": "yourapp.metered.live", "apiKey": "..." }). Without it, only STUN is used.
+
+const STUN_SERVERS = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  { urls: 'stun:stun.cloudflare.com:3478' }
+];
+const RELAY_CACHE_MS = 10 * MINUTE;
+let relayCache = { servers: null, expiresAt: 0 };
+
+function loadMeteredConfig() {
+  let domain = process.env.METERED_DOMAIN;
+  let apiKey = process.env.METERED_API_KEY;
+  if (!domain || !apiKey) {
+    try {
+      const file = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'metered.json'), 'utf8'));
+      // Fixed passwords copied from the dashboard ("Show ICE Servers Array") also work.
+      if (!apiKey && Array.isArray(file.iceServers)) {
+        const fixed = file.iceServers.map(validIceServer).filter(Boolean)
+          .filter((x) => x.username && x.credential && x.urls.some((u) => !u.startsWith('stun:')));
+        if (fixed.length) return { domain: file.domain || 'fixed passwords', fixed };
+        console.warn('[relay] metered.json has no usable TURN entries.');
+        return null;
+      }
+      domain = domain || file.domain;
+      apiKey = apiKey || file.apiKey;
+    } catch {
+      return null;
+    }
+  }
+  domain = String(domain || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  apiKey = String(apiKey || '').trim();
+  if (!/^[a-z0-9-]{1,63}\.metered\.live$/.test(domain) || !/^[\w-]{8,200}$/.test(apiKey)) {
+    console.warn('[relay] Metered settings ignored: the domain must look like yourapp.metered.live.');
+    return null;
+  }
+  return { domain, apiKey };
+}
+const METERED = loadMeteredConfig();
+
+function validIceServer(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const urls = (Array.isArray(entry.urls) ? entry.urls : [entry.urls])
+    .filter((u) => typeof u === 'string' && /^(stun|turn|turns):[\w.:?=&\-[\]]+$/.test(u));
+  if (!urls.length) return null;
+  const server = { urls };
+  if (typeof entry.username === 'string') server.username = entry.username;
+  if (typeof entry.credential === 'string') server.credential = entry.credential;
+  return server;
+}
+
+// Our own coturn (start-turn.sh writes data/turn.json). Passwords are made per
+// login and expire, using coturn's shared-secret scheme (use-auth-secret).
+const LOCAL_TURN_TTL_S = 12 * 60 * 60;
+function loadLocalTurn() {
+  let urls = process.env.TURN_URLS ? process.env.TURN_URLS.split(',') : null;
+  let secret = process.env.TURN_SECRET;
+  if (!urls || !secret) {
+    try {
+      const file = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'turn.json'), 'utf8'));
+      urls = urls || file.urls;
+      secret = secret || file.secret;
+    } catch {
+      return null;
+    }
+  }
+  urls = (Array.isArray(urls) ? urls : []).map((u) => String(u).trim()).filter((u) => /^turns?:[\w.:?=\-[\]]+$/.test(u));
+  if (!urls.length || typeof secret !== 'string' || secret.length < 16) {
+    console.warn('[relay] Local TURN settings ignored: they need turn: addresses and a secret of 16+ characters.');
+    return null;
+  }
+  return { urls, secret };
+}
+const LOCAL_TURN = loadLocalTurn();
+
+function localTurnServer(userId) {
+  if (!LOCAL_TURN) return null;
+  const username = `${Math.floor(Date.now() / 1000) + LOCAL_TURN_TTL_S}:${String(userId).replace(/:/g, '')}`;
+  const credential = crypto.createHmac('sha1', LOCAL_TURN.secret).update(username).digest('base64');
+  return { urls: LOCAL_TURN.urls, username, credential };
+}
+
+async function relayServers() {
+  if (!METERED) return null;
+  if (METERED.fixed) return METERED.fixed;
+  if (relayCache.servers && Date.now() < relayCache.expiresAt) return relayCache.servers;
+  const url = `https://${METERED.domain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED.apiKey)}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`Metered answered ${res.status}`);
+  const list = await res.json();
+  const servers = (Array.isArray(list) ? list : []).map(validIceServer).filter(Boolean)
+    .filter((s) => s.urls.some((u) => !u.startsWith('stun:')));
+  if (!servers.length) throw new Error('Metered returned no relay servers');
+  relayCache = { servers, expiresAt: Date.now() + RELAY_CACHE_MS };
+  return servers;
+}
+
+app.get('/api/ice-servers', requireSession, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (overLimit(`ice:${req.authSession.user_id}`, 60, 15 * MINUTE)) {
+    return res.status(429).json({ success: false, error: 'Too many requests. Try again later.' });
+  }
+  const relays = [];
+  const local = localTurnServer(req.authSession.user_id);
+  if (local) relays.push(local);
+  try {
+    relays.push(...((await relayServers()) || []));
+  } catch (err) {
+    console.warn('[relay] Could not get Metered relay servers:', err.message);
+  }
+  res.json({ success: true, relay: relays.length > 0, iceServers: [...STUN_SERVERS, ...relays] });
+});
+
+// =============================================================================
 // MEETINGS AND SIGNED MINUTES
 // =============================================================================
 
@@ -351,10 +559,13 @@ app.post('/api/minutes/sign', requireSession, async (req, res) => {
   if (overLimit(`sign:${session.user_id}`, 30, 15 * MINUTE)) {
     return res.status(429).json({ success: false, error: 'Too many signing attempts. Try again later.' });
   }
-  const { roomId, password, minutesText } = req.body || {};
+  const { roomId, password, minutesText, decision = 'approved', reason = '' } = req.body || {};
   if (typeof roomId !== 'string' || typeof password !== 'string' || typeof minutesText !== 'string'
     || !minutesText || minutesText.length > MAX_MINUTES_LENGTH) {
     return res.status(400).json({ success: false, error: 'roomId, password and minutesText are required' });
+  }
+  if (!['approved', 'not_approved'].includes(decision) || typeof reason !== 'string' || reason.length > 1000) {
+    return res.status(400).json({ success: false, error: 'decision must be approved or not_approved, with a reason of up to 1000 characters' });
   }
   const room = meetings.get(roomId);
   const member = room && [...room.members.values()].find((m) => m.user_id === session.user_id);
@@ -367,9 +578,25 @@ app.post('/api/minutes/sign', requireSession, async (req, res) => {
       password,
       minutes_text: minutesText,
       meeting_id: roomId,
-      assurance: member.assurance
+      assurance: member.assurance,
+      decision,
+      reason
     });
     if (!receipt.success) return res.status(401).json(receipt);
+    // The exact signed text is kept with each signature, so anyone in the
+    // meeting can later download the signed minutes as a PDF.
+    receipt.minutes_text = minutesText;
+    receipt.user_id = session.user_id;
+    receipt.audit = auditInfo(req);
+    writeAudit({
+      ...receipt.audit,
+      meeting_id: roomId,
+      user_id: session.user_id,
+      name: receipt.signed_by,
+      decision: receipt.decision,
+      minutes_sha256: receipt.document_sha256,
+      signature_sha256: crypto.createHash('sha256').update(receipt.signature_b64).digest('hex')
+    });
     room.signatures.push(receipt);
     io.to(roomId).emit('minutes-signed-broadcast', { roomId, signatureReceipt: receipt, minutesText });
     res.json(receipt);
@@ -454,6 +681,7 @@ io.on('connection', (socket) => {
 
     socket.join(room.id);
     room.members.set(socket.id, currentUser);
+    room.attendees.set(currentUser.user_id, currentUser.name);
     socket.to(room.id).emit('user-joined', { peerId: socket.id, user: currentUser });
     socket.emit('room-joined-success', {
       roomId: room.id,
@@ -462,7 +690,8 @@ io.on('connection', (socket) => {
       isLocked: room.isLocked,
       assurance: currentUser.assurance,
       existingPeers,
-      minutes: room.minutes,
+      minutesDoc: room.minutesDoc,
+      attendees: [...room.attendees].map(([user_id, name]) => ({ user_id, name })),
       signatures: room.signatures,
       waiting: isHost ? [...room.waiting].map(([peerId, user]) => ({
         peerId, user, removedEarlier: room.removed.has(user.user_id)
@@ -585,7 +814,7 @@ io.on('connection', (socket) => {
   });
 
   on('toggle-media-state', ({ type, enabled }) => {
-    if (!currentRoom || !['audio', 'video', 'screen'].includes(type) || typeof enabled !== 'boolean') return;
+    if (!currentRoom || !['audio', 'video', 'screen', 'recording'].includes(type) || typeof enabled !== 'boolean') return;
     socket.to(currentRoom).emit('peer-media-state-changed', { peerId: socket.id, type, enabled });
   });
 
@@ -601,11 +830,17 @@ io.on('connection', (socket) => {
     });
   });
 
-  on('minutes-update', ({ text }) => {
+  // One field of the minutes at a time, so people editing different sections
+  // don't overwrite each other.
+  on('minutes-patch', ({ field, value }) => {
     const room = currentRoom && meetings.get(currentRoom);
-    if (!room || typeof text !== 'string' || text.length > MAX_MINUTES_LENGTH) return;
-    room.minutes = text;
-    socket.to(currentRoom).emit('minutes-broadcast', { text });
+    if (!room) return;
+    const clean = cleanMinutesField(field, value);
+    if (clean === undefined) return;
+    const next = { ...room.minutesDoc, [field]: clean };
+    if (JSON.stringify(next).length > MAX_MINUTES_LENGTH) return;
+    room.minutesDoc = next;
+    socket.to(currentRoom).emit('minutes-patch', { field, value: clean });
   });
 
   on('token-presence', ({ present }) => {
@@ -676,6 +911,8 @@ async function start() {
   // are never sent unencrypted across the network.
   server.listen(PORT, isHttps ? '0.0.0.0' : '127.0.0.1', () => {
     console.log(`TrusMeet running at ${isHttps ? 'https' : 'http'}://localhost:${PORT}`);
+    const relayNames = [LOCAL_TURN && `this computer (${LOCAL_TURN.urls[0]})`, METERED && `Metered (${METERED.domain})`].filter(Boolean);
+    console.log(relayNames.length ? `Relay (TURN): ${relayNames.join(' + ')}` : 'Relay (TURN): not set up, so video may not connect across some networks');
     console.log(process.env.SIGNUP_CODE
       ? 'Sign-up code: set by SIGNUP_CODE'
       : `Sign-up code: see ${SIGNUP_CODE_FILE}`);

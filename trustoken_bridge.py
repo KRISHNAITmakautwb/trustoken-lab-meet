@@ -68,7 +68,7 @@ class CK_TOKEN_INFO(ctypes.Structure):
 
 def check_hardware_token():
     """
-    Checks if physical C-DAC TrusToken USB dongle is connected via PKCS#11.
+    Checks if a physical TrusToken USB dongle is connected via PKCS#11.
     """
     result = {
         "library_path": PKCS11_LIB_PATH,
@@ -81,7 +81,7 @@ def check_hardware_token():
     }
     
     if not os.path.exists(PKCS11_LIB_PATH):
-        result["error"] = "C-DAC TrusToken library not found at " + PKCS11_LIB_PATH
+        result["error"] = "TrusToken library not found at " + PKCS11_LIB_PATH
         return result
 
     try:
@@ -404,11 +404,19 @@ def sign_minutes(payload):
     if error:
         return fail(error)
 
+    decision = text_field(payload, "decision") or "approved"
+    if decision not in ("approved", "not_approved"):
+        return fail("decision must be approved or not_approved")
+    reason = text_field(payload, "reason").strip()[:1000] if decision == "not_approved" else ""
+
     signed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     document_sha256 = hashlib.sha256(text_field(payload, "minutes_text").encode("utf-8")).hexdigest()
     # The signature covers the meeting, the time and the token status, not just the text.
+    # Version 3 adds the decision (approved / not approved) and an optional reason.
     signed_payload = json.dumps({
-        "version": 2,
+        "version": 3,
+        "decision": decision,
+        "reason": reason,
         "meeting_id": text_field(payload, "meeting_id"),
         "signed_at": signed_at,
         "signer": row["username"],
@@ -427,6 +435,9 @@ def sign_minutes(payload):
         "document_sha256": document_sha256,
         "algorithm": "ECDSA-SHA256 (NIST P-256)",
         "signed_by": row["display_name"],
+        "signer": row["username"],
+        "decision": decision,
+        "reason": reason,
         "assurance": text_field(payload, "assurance"),
         "meeting_id": text_field(payload, "meeting_id"),
         "cert_serial": row["cert_serial"],
