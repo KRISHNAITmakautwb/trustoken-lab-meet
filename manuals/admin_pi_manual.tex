@@ -295,6 +295,29 @@ sudo ufw allow 8443/tcp
 % CHAPTER 4
 \chapter{PI Host Privileges \& Zero-Trust Moderation}
 
+\section{Member Onboarding \& Sign-Up Code Management}
+To prevent unauthorized public internet users from creating accounts when using public edge tunnels, TrusMeet employs a \textbf{Secret Lab Registration Code}.
+
+\subsection{Viewing and Managing the Sign-Up Code}
+The code is stored on the server at:
+\begin{lstlisting}[language=bash]
+cat /home/krishna-saha/trustoken-lab-meet/data/signup-code.txt
+\end{lstlisting}
+The current active lab registration code is \texttt{\textbf{710b45f5787e}}.
+\begin{itemize}
+    \item \textbf{Custom Code}: The administrator can define a custom code by passing \texttt{SIGNUP\_CODE="MySecretCode"} before starting \texttt{node server.js}, or by editing \texttt{data/signup-code.txt}.
+    \item \textbf{Timing Attack Resistance}: Code comparison is executed using constant-time SHA-256 digest comparison (\texttt{crypto.timingSafeEqual}) to prevent timing side-channel attacks.
+    \item \textbf{Anti-Abuse Rate Limiting}: The server enforces strict rate limits: maximum 10 registration attempts per IP per hour, and 30 login attempts per 15 minutes.
+\end{itemize}
+
+\subsection{Cryptographic Account Issuance}
+When a scholar registers with their name, username, and password:
+\begin{enumerate}[noitemsep]
+    \item An ECC P-256 / RSA keypair is minted via \texttt{trustoken\_bridge.py}.
+    \item An X.509 certificate is signed under the Lab Root CA (\texttt{lab\_ca.crt}).
+    \item The private key is encrypted with AES-256-GCM using a PBKDF2 derivative of the scholar's password, guaranteeing zero plaintext storage.
+\end{enumerate}
+
 \section{Host Role Differentiation}
 The server evaluates user certificates issued under the Lab CA. A user logging in with the Principal Investigator certificate is automatically granted \textbf{Host Authority}.
 

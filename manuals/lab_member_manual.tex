@@ -181,56 +181,77 @@ TrusMeet runs directly inside your web browser. You do not need to install any h
 
 \newpage
 % CHAPTER 2
-\chapter{Hardware Token Setup \& Authentication}
+\chapter{Account Creation, Sign-Up \& Authentication}
 
-\section{Connecting Your C-DAC TrusToken}
-\begin{enumerate}
-    \item Insert your issued C-DAC TrusToken into an available USB port on your computer.
-    \item Observe the status LED indicator located on the token casing:
-    \begin{itemize}
-        \item \textbf{Solid Red Light}: This is the \textbf{normal power and standby} state. It indicates that the token is receiving power and its internal cryptographic chip has booted securely.
-        \item \textbf{Blinking Red Light}: Occurs when the token is actively processing an authentication request or cryptographic signature.
-    \end{itemize}
-\end{enumerate}
+\section{The Secret Lab Sign-Up Code}
+To enforce zero-trust security and prevent unauthorized external internet visitors from creating accounts on the lab server, TrusMeet requires a \textbf{Secret Lab Sign-Up Code}.
 
-\begin{infobox}{What does the Solid Red Light Mean?}
-A steady, solid red light does \textbf{not} indicate an error. It indicates that the hardware container is locked and waiting for you to enter your PIN.
+\begin{infobox}{Lab Registration Secret}
+The sign-up code is provisioned by the Principal Investigator / Lab Administrator. For authorized scholars of \textbf{de.ci.phe.red LAB}, the current active registration code is:
+\begin{center}
+\Large\texttt{\textbf{710b45f5787e}}
+\end{center}
+\textit{Keep this code confidential within the lab; do not share it outside authorized research personnel.}
 \end{infobox}
 
-\section{Step-by-Step Meeting Room Entry}
-
-\subsection{1. Open the Meeting Link}
-Your Principal Investigator (PI) or session lead will share the meeting URL:
-\begin{itemize}
-    \item \textbf{On Campus Wi-Fi / Local Network}: \texttt{https://<SERVER-IP>:8443/?room=LAB-DECIPHERED-SYNC}
-    \item \textbf{Over Mobile Cellular / Remote Internet}: \texttt{https://<TUNNEL-URL>.trycloudflare.com/?room=LAB-DECIPHERED-SYNC}
-\end{itemize}
-
-\subsection{2. Browser Security Prompt (Self-Signed LAN SSL)}
-If connecting over local IP on port 8443, the browser may warn that the SSL certificate is self-signed:
-\begin{enumerate}[noitemsep]
-    \item Click \textbf{"Advanced"}.
-    \item Click \textbf{"Proceed to <IP> (unsafe)"}.
-    \item This is completely normal for lab-hosted internal networks.
-\end{enumerate}
-
-\subsection{3. Camera \& Microphone Permissions}
-When the browser prompts:
-\begin{quote}
-\textit{"<URL> wants to use your microphone and camera"}
-\end{quote}
-Click \textbf{"Allow"}. If you accidentally click "Block", click the padlock icon in your browser URL bar, reset permissions, and refresh the page.
-
-\subsection{4. Hardware Token Authentication (Login Modal)}
+\section{Step-by-Step Sign-Up Process (``Create Profile'')}
+When accessing TrusMeet for the first time, follow these steps to register:
 \begin{enumerate}
-    \item The TrusMeet login screen will detect the USB token and display the cryptographic challenge issued by the server.
-    \item Enter your assigned \textbf{Hardware PIN} (e.g., default: \texttt{123456} or your personalized lab PIN).
-    \item Click \textbf{"Authenticate with TrusToken"}.
-    \item The on-chip cryptographic engine will sign the server nonce with your private key. Upon verification against the Lab Root CA, you are granted immediate access to the meeting room.
+    \item \textbf{Access the Platform}: Open the meeting or lobby URL provided by the PI:
+    \begin{itemize}
+        \item \textbf{Local / Campus Network}: \texttt{https://10.10.1.226:8443} (or \texttt{https://localhost:8443})
+        \item \textbf{Mobile Cellular / Remote Internet}: \texttt{https://<TUNNEL-URL>.trycloudflare.com}
+    \end{itemize}
+    \item \textbf{Select the Sign-Up Tab}: In the authentication panel on the left, click the \textbf{``Create Profile''} tab.
+    \item \textbf{Complete the Registration Fields}:
+    \begin{itemize}
+        \item \textbf{Your Name}: Enter your full professional name (e.g., \textit{Krishna Saha} or \textit{Ananya Sharma}, up to 60 characters).
+        \item \textbf{Username}: Choose a unique identifier of 3 to 32 characters (letters, numbers, dot, dash, or underscore; e.g., \texttt{ksaha} or \texttt{ananya\_phd}).
+        \item \textbf{Password}: Enter a strong master passphrase of \textbf{at least 10 characters}. This password decrypts your personal cryptographic container.
+        \item \textbf{Sign-up Code}: Enter the official lab secret: \texttt{\textbf{710b45f5787e}}.
+    \end{itemize}
+    \item \textbf{Submit Registration}: Click the \textbf{``Create Profile''} button.
 \end{enumerate}
 
-\subsection{5. Alternative: Scholar Emulation Profile}
-If you are attending remotely from a phone or a laptop where a physical USB port is unavailable, select your name from the \textbf{"Lab Member Profiles"} list (e.g., \textit{"PhD Scholar"} or \textit{"Research Scholar"}). Enter your scholar credentials to join with member-tier privileges.
+\section{What Happens Behind the Scenes (PKI Generation)}
+When you click ``Create Profile'', TrusMeet executes an automated cryptographic onboarding protocol:
+\begin{enumerate}[noitemsep]
+    \item \textbf{Keypair Generation}: The Python PKI bridge generates a cryptographically secure key pair (ECDSA P-256 or RSA).
+    \item \textbf{X.509 Certificate Issuance}: An official digital certificate is minted and signed by the \textbf{Lab Root CA} (\texttt{lab\_ca.crt}), establishing your verified identity within the laboratory trust tree.
+    \item \textbf{Encrypted Key Storage}: Your private key is encrypted with your chosen password using AES-256 and stored in the secure local SQLite vault (\texttt{trustoken\_users.db}).
+    \item \textbf{Automatic Session Activation}: A 256-bit cryptographically secure session token is generated, and you are immediately logged in.
+\end{enumerate}
+
+\section{How to Log In (Subsequent Visits)}
+For all future meetings, you do not need to register again:
+\begin{enumerate}
+    \item Navigate to the TrusMeet lobby or click the meeting invitation link.
+    \item Under the default \textbf{``Log In''} tab, enter your \textbf{Username} and \textbf{Password}.
+    \item Click \textbf{``Log In''}.
+    \item If you arrived via a direct meeting link (e.g., \texttt{?room=LAB-DECIPHERED-SYNC}), the application will automatically connect you to the conference room after login!
+\end{enumerate}
+
+\section{Connecting Your Physical C-DAC TrusToken}
+If you have been issued a physical C-DAC TrusToken USB dongle:
+\begin{enumerate}
+    \item Insert the token into an available USB port.
+    \item Check the status LED on the token casing:
+    \begin{itemize}
+        \item \textbf{Solid Red Light (Normal / Standby)}: Confirms that the device is receiving 5V DC power from the host USB port and the crypto-container is in secure standby awaiting authentication.
+        \item \textbf{Blinking Red Light (Active)}: Indicates that cryptographic operations or APDU commands are actively being exchanged with the host.
+    \end{itemize}
+    \item In the TrusMeet lobby under your account profile, click \textbf{``Add USB Token''} to bind the physical device to your active session.
+\end{enumerate}
+
+\begin{tipbox}{Remote or Mobile Scholars without a USB Token}
+Scholars joining from smartphones, tablets, or remote laptops without USB ports can participate fully using their verified \textbf{Software Scholar Profile}. The host will admit you from the waiting room.
+\end{tipbox}
+
+\section{Browser Permissions \& Room Admission}
+\begin{itemize}
+    \item \textbf{SSL Security Bypass (Local IP)}: When connecting over LAN on port 8443, click \textbf{``Advanced''} $\rightarrow$ \textbf{``Proceed to IP (unsafe)''} to accept the local self-signed certificate.
+    \item \textbf{Camera \& Microphone Access}: Click \textbf{``Allow''} when prompted by your browser. You can preview and test your video and audio in the right-hand panel before entering.
+\end{itemize}
 
 \newpage
 % CHAPTER 3
